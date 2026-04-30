@@ -100,6 +100,32 @@ income:            'Income',
     return { id: crypto.randomUUID(), date, amount, note };
   }
 
+  function newDeduction(name = '', amount = 0) {
+    return { id: crypto.randomUUID(), name, amount };
+  }
+
+  function defaultSalaryData() {
+    return {
+      annualGross: 0,
+      deductions: [
+        newDeduction('401(k) Contribution', 0),
+        newDeduction('Health Insurance',    0),
+        newDeduction('HSA',                 0),
+      ],
+      taxes: 0,
+      salarySource: 'manual',
+    };
+  }
+
+  function cloneSalaryData(src, salarySource = 'inherited') {
+    return {
+      annualGross: parseAmount(src.annualGross),
+      deductions: (src.deductions || []).map(d => newDeduction(d.name, parseAmount(d.amount))),
+      taxes: parseAmount(src.taxes),
+      salarySource,
+    };
+  }
+
   function defaultMonthData(priorMonth = null) {
     if (priorMonth) {
       const copyRows = list => list.map((r, i) => newRow(r.name, r.expected, r.order ?? i));
@@ -141,6 +167,7 @@ income:            'Income',
   function migrateState(s) {
     if (!s.settings) s.settings = {};
     if (!s.settings.defaultTransactionDate) s.settings.defaultTransactionDate = 'today';
+    if (!s.salaryData) s.salaryData = {};
     for (const [monthKey, md] of Object.entries(s.months || {})) {
       if (!md) continue;
       (md.income || []).forEach(r => migrateRow(r, monthKey));
@@ -196,11 +223,23 @@ income:            'Income',
       state = {
         settings: { currency: 'USD', numberFormat: 'us', defaultTransactionDate: 'today' },
         months: {},
+        salaryData: {},
       };
     }
     migrateState(state);
     ensureMonth(currentMonth);
+    ensureSalaryMonth(currentMonth);
     saveState();
+  }
+
+  function ensureSalaryMonth(key) {
+    if (!state.salaryData) state.salaryData = {};
+    if (state.salaryData[key]) return;
+    const keys     = Object.keys(state.salaryData).sort();
+    const priorKey = keys.filter(k => k < key).pop();
+    state.salaryData[key] = priorKey
+      ? cloneSalaryData(state.salaryData[priorKey], 'inherited')
+      : defaultSalaryData();
   }
 
   // ============================================================
@@ -349,11 +388,13 @@ income:            'Income',
 
   function applyUndo() {
     flushPendingAddRow(); // commit pending add then immediately undo it
+    flushSalaryEditSession();
     if (undoStack.length === 0) { showToast('Nothing to undo'); return; }
     const { description, snapshot } = undoStack.pop();
     redoStack.push({ description, snapshot: JSON.parse(JSON.stringify(state)) });
     state = snapshot;
     if (!state.months[currentMonth]) ensureMonth(currentMonth);
+    if (!state.salaryData?.[currentMonth]) ensureSalaryMonth(currentMonth);
     renderAll();
     debouncedSave();
     showToast(`Undid: ${description}`);
@@ -361,12 +402,14 @@ income:            'Income',
 
   function applyRedo() {
     flushPendingAddRow();
+    flushSalaryEditSession();
     if (redoStack.length === 0) { showToast('Nothing to redo'); return; }
     const { description, snapshot } = redoStack.pop();
     undoStack.push({ description, snapshot: JSON.parse(JSON.stringify(state)) });
     if (undoStack.length > MAX_UNDO) undoStack.shift();
     state = snapshot;
     if (!state.months[currentMonth]) ensureMonth(currentMonth);
+    if (!state.salaryData?.[currentMonth]) ensureSalaryMonth(currentMonth);
     renderAll();
     debouncedSave();
     showToast(`Redid: ${description}`);
@@ -627,7 +670,9 @@ income:            'Income',
   function renderAll() {
     renderAllTables();
     renderSummary();
+    renderSalary();
     syncCopyBtnLabel();
+    syncApplyFutureBtnLabel();
   }
 
   // ============================================================
@@ -871,7 +916,7 @@ income:            'Income',
     }
 
     // Add row
-    const addRowBtn = e.target.closest('.btn-add');
+    const addRowBtn = e.target.closest('.btn-add[data-category]');
     if (addRowBtn) {
       const section   = addRowBtn.dataset.category;
       const list      = getRowList(section);
@@ -892,47 +937,55 @@ income:            'Income',
   // MONTH PICKER
   // ============================================================
   function buildMonthPicker() {
-    const section = document.querySelector('.month-picker-section');
-    if (!section) return;
-    section.innerHTML = '';
+    const sections = document.querySelectorAll('.month-picker-section');
+    if (!sections.length) return;
 
-    const [y, m]  = currentMonth.split('-').map(Number);
-    const prevBtn = el('button', { className: 'btn-icon', 'aria-label': 'Previous month', id: 'month-prev' }, '‹');
-    const nextBtn = el('button', { className: 'btn-icon', 'aria-label': 'Next month',     id: 'month-next' }, '›');
-    const label   = el('button', {
-      className:       'month-label',
-      id:              'month-label',
-      'aria-label':    'Select month and year',
-      'aria-haspopup': 'listbox',
-      'aria-expanded': 'false',
+    const [y, m]   = currentMonth.split('-').map(Number);
+    const labelText = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    sections.forEach((section, idx) => {
+      section.innerHTML = '';
+      const suffix  = idx === 0 ? '' : `-${idx}`;
+      const prevBtn = el('button', { className: 'btn-icon', 'aria-label': 'Previous month', id: `month-prev${suffix}` }, '‹');
+      const nextBtn = el('button', { className: 'btn-icon', 'aria-label': 'Next month',     id: `month-next${suffix}` }, '›');
+      const label   = el('button', {
+        className:       'month-label',
+        id:              `month-label${suffix}`,
+        'aria-label':    'Select month and year',
+        'aria-haspopup': 'listbox',
+        'aria-expanded': 'false',
+      });
+      label.textContent = labelText;
+
+      prevBtn.addEventListener('click', () => navigateMonth(-1));
+      nextBtn.addEventListener('click', () => navigateMonth(1));
+      label.addEventListener('click', () => toggleMonthDropdown(label));
+
+      section.append(prevBtn, label, nextBtn);
     });
-    label.textContent = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-
-    prevBtn.addEventListener('click', () => navigateMonth(-1));
-    nextBtn.addEventListener('click', () => navigateMonth(1));
-    label.addEventListener('click', toggleMonthDropdown);
-
-    section.append(prevBtn, label, nextBtn);
   }
 
   function navigateMonth(delta) {
+    flushSalaryEditSession();
     const [y, m] = currentMonth.split('-').map(Number);
     currentMonth = toMonthKey(new Date(y, m - 1 + delta, 1));
     expandedRows.clear();
     ensureMonth(currentMonth);
+    ensureSalaryMonth(currentMonth);
     saveState();
     buildMonthPicker();
     renderAll();
     closeMonthDropdown();
   }
 
-  let monthDropdownEl = null;
+  let monthDropdownEl    = null;
+  let monthDropdownLabel = null;
 
-  function toggleMonthDropdown() {
+  function toggleMonthDropdown(label) {
     if (monthDropdownEl) { closeMonthDropdown(); return; }
-
-    const label = document.getElementById('month-label');
+    if (!label) label = document.querySelector('.month-label');
     if (!label) return;
+    monthDropdownLabel = label;
 
     const [cy] = currentMonth.split('-').map(Number);
     let dropdownYear = cy;
@@ -970,9 +1023,11 @@ income:            'Income',
         textContent:     name,
       });
       btn.addEventListener('click', () => {
+        flushSalaryEditSession();
         currentMonth = `${dropdownYear}-${String(m).padStart(2, '0')}`;
         expandedRows.clear();
         ensureMonth(currentMonth);
+        ensureSalaryMonth(currentMonth);
         saveState();
         closeMonthDropdown();
         buildMonthPicker();
@@ -1000,7 +1055,8 @@ income:            'Income',
     monthDropdownEl?.remove();
     monthDropdownEl = null;
     document.removeEventListener('click', onOutsideDropdown);
-    document.getElementById('month-label')?.setAttribute('aria-expanded', 'false');
+    monthDropdownLabel?.setAttribute('aria-expanded', 'false');
+    monthDropdownLabel = null;
   }
 
   // ============================================================
@@ -1117,6 +1173,339 @@ income:            'Income',
   }
 
   // ============================================================
+  // APPLY CURRENT MONTH TO FUTURE MONTHS
+  // ============================================================
+  function getFutureMonthKeys() {
+    return Object.keys(state.months || {})
+      .filter(k => k > currentMonth)
+      .sort();
+  }
+
+  function syncApplyFutureBtnLabel() {
+    const btn = document.getElementById('apply-future-btn');
+    if (!btn) return;
+    const [y, m]   = currentMonth.split('-').map(Number);
+    const currName = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    btn.textContent = `Apply ${currName} to future months`;
+  }
+
+  function applyCurrentToFutureMonths() {
+    const md       = state.months[currentMonth];
+    const [cy, cm] = currentMonth.split('-').map(Number);
+    const currName = new Date(cy, cm - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    const futureKeys = getFutureMonthKeys();
+    if (futureKeys.length === 0) {
+      alert('No future months have data yet. New months will inherit from the most recent month when you visit them.');
+      return;
+    }
+
+    const message = `Apply ${currName}'s setup to ${futureKeys.length} future month(s)? This will overwrite category names, expected values, and ordering in those months. Actual spending values will not be touched.`;
+    if (!confirm(message)) return;
+
+    pushUndo(`apply ${currName} to future months`);
+
+    const buildList = (currList, futList) => {
+      const futByName = new Map();
+      (futList || []).forEach(r => { if (!futByName.has(r.name)) futByName.set(r.name, r); });
+      return (currList || []).map((cr, i) => {
+        const existing = futByName.get(cr.name);
+        if (existing) {
+          return {
+            id:           existing.id,
+            name:         cr.name,
+            expected:     cr.expected,
+            order:        cr.order ?? i,
+            transactions: existing.transactions || [],
+          };
+        }
+        return newRow(cr.name, cr.expected, cr.order ?? i);
+      });
+    };
+
+    futureKeys.forEach(key => {
+      const fmd = state.months[key];
+      if (!fmd) return;
+      if (!fmd.categories) fmd.categories = {};
+      fmd.income                  = buildList(md?.income,                  fmd.income);
+      fmd.categories.fixed        = buildList(md?.categories?.fixed,        fmd.categories.fixed);
+      fmd.categories.variable     = buildList(md?.categories?.variable,     fmd.categories.variable);
+      fmd.categories.recreational = buildList(md?.categories?.recreational, fmd.categories.recreational);
+      fmd.categories.savings      = buildList(md?.categories?.savings,      fmd.categories.savings);
+    });
+
+    saveState();
+    renderAll();
+  }
+
+  // ============================================================
+  // SALARY PAGE
+  // ============================================================
+  let salaryEditSession = null; // { snapshot, monthKey, timer }
+  const SALARY_DEBOUNCE_MS = 1000;
+
+  function getSalaryRecord(key) {
+    if (!state.salaryData) state.salaryData = {};
+    if (!state.salaryData[key]) ensureSalaryMonth(key);
+    return state.salaryData[key];
+  }
+
+  function sumDeductions(rec) {
+    return (rec.deductions || []).reduce((acc, d) => acc + parseAmount(d.amount), 0);
+  }
+
+  function computeTakeHome(rec) {
+    const monthlyGross = parseAmount(rec.annualGross) / 12;
+    return monthlyGross - sumDeductions(rec) - parseAmount(rec.taxes);
+  }
+
+  function renderSalary() {
+    const rec = getSalaryRecord(currentMonth);
+
+    const annualInput = document.getElementById('salary-annual-gross');
+    if (annualInput && document.activeElement !== annualInput) {
+      annualInput.value = formatCurrency(parseAmount(rec.annualGross));
+    }
+
+    const taxesInput = document.getElementById('salary-taxes');
+    if (taxesInput && document.activeElement !== taxesInput) {
+      taxesInput.value = formatCurrency(parseAmount(rec.taxes));
+    }
+
+    renderDeductions(rec);
+    renderSalaryDerived();
+  }
+
+  function renderDeductions(rec) {
+    const wrap = document.getElementById('salary-deductions');
+    if (!wrap) return;
+    const activeId = document.activeElement?.closest?.('[data-deduction-id]')?.dataset?.deductionId;
+    const activeField = document.activeElement?.dataset?.deductionField;
+    wrap.innerHTML = '';
+    (rec.deductions || []).forEach(d => {
+      wrap.appendChild(buildDeductionRow(d, activeId === d.id ? activeField : null));
+    });
+  }
+
+  function buildDeductionRow(deduction, focusField) {
+    const row = el('div', {
+      className:           'salary-row salary-row--deduction',
+      'data-deduction-id': deduction.id,
+    });
+
+    const nameInput = el('input', {
+      type:                    'text',
+      placeholder:             'Deduction name',
+      value:                   deduction.name || '',
+      'aria-label':            'Deduction name',
+      'data-deduction-field':  'name',
+    });
+
+    const rawAmount = parseAmount(deduction.amount);
+    const amountInput = el('input', {
+      type:                    'text',
+      inputmode:               'decimal',
+      value:                   formatCurrency(rawAmount),
+      'aria-label':            'Deduction amount',
+      'data-deduction-field':  'amount',
+    });
+    amountInput.addEventListener('focus', () => {
+      const raw = parseAmount(amountInput.value);
+      amountInput.value = raw === 0 ? '' : String(raw);
+    });
+    amountInput.addEventListener('blur', () => {
+      const raw = parseAmount(amountInput.value);
+      amountInput.value = formatCurrency(raw);
+    });
+    amountInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+    });
+
+    const removeBtn = el('button', {
+      className:    'btn-remove',
+      type:         'button',
+      'aria-label': 'Remove deduction',
+      'data-action':'remove-deduction',
+      textContent:  '×',
+    });
+
+    row.append(nameInput, amountInput, removeBtn);
+
+    if (focusField === 'name')   setTimeout(() => nameInput.focus(),   0);
+    if (focusField === 'amount') setTimeout(() => amountInput.focus(), 0);
+
+    return row;
+  }
+
+  function renderSalaryDerived() {
+    const rec = getSalaryRecord(currentMonth);
+    const monthlyGross = parseAmount(rec.annualGross) / 12;
+    const totalDed     = sumDeductions(rec);
+    const takeHome     = monthlyGross - totalDed - parseAmount(rec.taxes);
+
+    const monthlyEl = document.getElementById('salary-monthly-gross');
+    if (monthlyEl) monthlyEl.textContent = formatCurrency(monthlyGross);
+
+    const totalEl = document.getElementById('salary-deductions-total');
+    if (totalEl) totalEl.textContent = formatCurrency(totalDed);
+
+    const takeHomeValEl = document.getElementById('salary-take-home-value');
+    if (takeHomeValEl) takeHomeValEl.textContent = formatCurrency(takeHome);
+
+    const takeHomeBox = document.getElementById('salary-take-home');
+    if (takeHomeBox) takeHomeBox.classList.toggle('salary-take-home--negative', takeHome < 0);
+  }
+
+  function beginSalaryEditSession() {
+    if (salaryEditSession) {
+      clearTimeout(salaryEditSession.timer);
+    } else {
+      salaryEditSession = {
+        snapshot: JSON.parse(JSON.stringify(state)),
+        monthKey: currentMonth,
+        timer:    null,
+      };
+    }
+    salaryEditSession.timer = setTimeout(endSalaryEditSession, SALARY_DEBOUNCE_MS);
+  }
+
+  function flushSalaryEditSession() {
+    if (!salaryEditSession) return;
+    clearTimeout(salaryEditSession.timer);
+    const session = salaryEditSession;
+    salaryEditSession = null;
+    if (JSON.stringify(state) === JSON.stringify(session.snapshot)) return;
+    pushUndo('salary edit', session.snapshot);
+    saveState();
+  }
+
+  function endSalaryEditSession() {
+    const session = salaryEditSession;
+    if (!session) return;
+    salaryEditSession = null;
+    if (JSON.stringify(state) === JSON.stringify(session.snapshot)) return;
+
+    pushUndo('salary edit', session.snapshot);
+    saveState();
+
+    const realMonth = toMonthKey(new Date());
+    if (session.monthKey < realMonth) return;
+
+    const targets = collectInheritedFutureSalaryKeys(session.monthKey);
+    if (targets.length === 0) return;
+
+    if (confirm('Apply this change to future months too?')) {
+      pushUndo('apply salary forward');
+      const sourceRec = state.salaryData[session.monthKey];
+      if (!sourceRec) return;
+      for (const k of targets) {
+        state.salaryData[k] = cloneSalaryData(sourceRec, 'inherited');
+      }
+      saveState();
+      renderSalary();
+    }
+  }
+
+  function collectInheritedFutureSalaryKeys(fromMonth) {
+    const keys = Object.keys(state.salaryData || {})
+      .filter(k => k > fromMonth)
+      .sort();
+    const out = [];
+    for (const k of keys) {
+      if (state.salaryData[k]?.salarySource === 'manual') break;
+      out.push(k);
+    }
+    return out;
+  }
+
+  function handleSalaryInput(e) {
+    const target = e.target;
+    if (target.id === 'salary-annual-gross') {
+      const rec = getSalaryRecord(currentMonth);
+      rec.annualGross  = parseAmount(target.value);
+      rec.salarySource = 'manual';
+      beginSalaryEditSession();
+      renderSalaryDerived();
+      debouncedSave();
+      return;
+    }
+    if (target.id === 'salary-taxes') {
+      const rec = getSalaryRecord(currentMonth);
+      rec.taxes        = parseAmount(target.value);
+      rec.salarySource = 'manual';
+      beginSalaryEditSession();
+      renderSalaryDerived();
+      debouncedSave();
+      return;
+    }
+    const dedRow = target.closest('[data-deduction-id]');
+    if (dedRow) {
+      const rec = getSalaryRecord(currentMonth);
+      const ded = (rec.deductions || []).find(d => d.id === dedRow.dataset.deductionId);
+      if (!ded) return;
+      const field = target.dataset.deductionField;
+      if (field === 'name')   ded.name = target.value;
+      if (field === 'amount') ded.amount = parseAmount(target.value);
+      rec.salarySource = 'manual';
+      beginSalaryEditSession();
+      if (field === 'amount') renderSalaryDerived();
+      debouncedSave();
+    }
+  }
+
+  function handleSalaryClick(e) {
+    if (e.target.id === 'salary-add-deduction') {
+      flushSalaryEditSession();
+      pushUndo('add deduction');
+      const rec = getSalaryRecord(currentMonth);
+      rec.deductions = rec.deductions || [];
+      rec.deductions.push(newDeduction('', 0));
+      rec.salarySource = 'manual';
+      saveState();
+      renderDeductions(rec);
+      renderSalaryDerived();
+      const wrap = document.getElementById('salary-deductions');
+      const lastRow = wrap?.lastElementChild;
+      lastRow?.querySelector('input[data-deduction-field="name"]')?.focus();
+      return;
+    }
+
+    const removeBtn = e.target.closest('[data-action="remove-deduction"]');
+    if (removeBtn) {
+      const dedRow = removeBtn.closest('[data-deduction-id]');
+      if (!dedRow) return;
+      flushSalaryEditSession();
+      pushUndo('delete deduction');
+      const rec = getSalaryRecord(currentMonth);
+      rec.deductions = (rec.deductions || []).filter(d => d.id !== dedRow.dataset.deductionId);
+      rec.salarySource = 'manual';
+      saveState();
+      renderDeductions(rec);
+      renderSalaryDerived();
+    }
+  }
+
+  function bindSalaryInputFormatting() {
+    const annualInput = document.getElementById('salary-annual-gross');
+    const taxesInput  = document.getElementById('salary-taxes');
+    [annualInput, taxesInput].forEach(input => {
+      if (!input || input.dataset.formattingBound === '1') return;
+      input.dataset.formattingBound = '1';
+      input.addEventListener('focus', () => {
+        const raw = parseAmount(input.value);
+        input.value = raw === 0 ? '' : String(raw);
+      });
+      input.addEventListener('blur', () => {
+        const raw = parseAmount(input.value);
+        input.value = formatCurrency(raw);
+      });
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+      });
+    });
+  }
+
+  // ============================================================
   // EXPORT JSON
   // ============================================================
   function exportJSON() {
@@ -1142,10 +1531,12 @@ income:            'Income',
   // ============================================================
   // NAVIGATION
   // ============================================================
-  const VALID_PAGES = ['dashboard', 'budget', 'investing', 'settings'];
+  const VALID_PAGES = ['dashboard', 'salary', 'budget', 'investing', 'settings'];
 
   function showPage(pageName) {
     if (!VALID_PAGES.includes(pageName)) pageName = 'budget';
+
+    if (pageName !== 'salary') flushSalaryEditSession();
 
     VALID_PAGES.forEach(p => {
       document.getElementById(`page-${p}`)?.classList.add('page-hidden');
@@ -1270,6 +1661,10 @@ income:            'Income',
     main?.addEventListener('input', handleTableInput);
     main?.addEventListener('click', handleTableClick);
 
+    const salaryPage = document.getElementById('page-salary');
+    salaryPage?.addEventListener('input', handleSalaryInput);
+    salaryPage?.addEventListener('click', handleSalaryClick);
+
     // Track edits to name / expected inputs for undo (capture pre-edit snapshot on focus)
     main?.addEventListener('focusin', e => {
       const input = e.target.closest('[data-field]');
@@ -1320,6 +1715,7 @@ income:            'Income',
 
     document.addEventListener('click', e => {
       if (e.target.id === 'copy-prev-month-btn') { copyFromPrevMonth(); return; }
+      if (e.target.id === 'apply-future-btn')    { applyCurrentToFutureMonths(); return; }
       if (e.target.id === 'export-btn')          { exportJSON(); return; }
       if (e.target.id === 'reset-month-btn')     { confirmInline(e.target, T('resetMonthConfirm'), resetCurrentMonth); return; }
       if (e.target.id === 'clear-data-btn')      { confirmInline(e.target, T('clearAllConfirm'),   clearAllData);      return; }
@@ -1333,6 +1729,7 @@ income:            'Income',
     initState();
     syncSettingsUI();
     buildMonthPicker();
+    bindSalaryInputFormatting();
     renderAll();
     bindEvents();
     initNav();

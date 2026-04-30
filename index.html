@@ -50,6 +50,15 @@
         </a>
       </li>
       <li>
+        <a href="#salary" class="sidebar-item" data-page="salary" title="Salary">
+          <svg class="sidebar-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="12" y1="1" x2="12" y2="23"/>
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+          <span class="nav-label">Salary</span>
+        </a>
+      </li>
+      <li>
         <a href="#budget" class="sidebar-item sidebar-item--active" data-page="budget" aria-current="page" title="Budget">
           <svg class="sidebar-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
@@ -87,6 +96,73 @@
       <div class="page-placeholder">
         <p>Dashboard coming soon</p>
       </div>
+    </section>
+
+    <!-- Salary page -->
+    <section id="page-salary" class="page-hidden">
+
+      <!-- Month Picker -->
+      <section class="month-picker-section" aria-label="Month selection">
+        <label for="month-picker-salary" class="sr-only">Select month</label>
+      </section>
+
+      <!-- Gross Compensation -->
+      <section class="salary-section" aria-labelledby="salary-gross-heading">
+        <h2 id="salary-gross-heading">Gross Compensation</h2>
+        <div class="salary-rows">
+          <div class="salary-row">
+            <label for="salary-annual-gross">Annual Pre-Tax Salary</label>
+            <input
+              id="salary-annual-gross"
+              class="salary-input"
+              type="text"
+              inputmode="decimal"
+              data-salary-field="annualGross" />
+          </div>
+          <div class="salary-row salary-row--readonly">
+            <span class="salary-row-label">Monthly Gross</span>
+            <output id="salary-monthly-gross" class="salary-output">$0.00</output>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pre-Tax Deductions -->
+      <section class="salary-section" aria-labelledby="salary-deductions-heading">
+        <h2 id="salary-deductions-heading">Pre-Tax Deductions (Monthly)</h2>
+        <div class="salary-rows" id="salary-deductions"></div>
+        <button class="btn-add" id="salary-add-deduction" type="button">+ Add deduction</button>
+        <div class="salary-row salary-row--total">
+          <span class="salary-row-label">Total Pre-Tax</span>
+          <output id="salary-deductions-total" class="salary-output">$0.00</output>
+        </div>
+      </section>
+
+      <!-- Taxes -->
+      <section class="salary-section" aria-labelledby="salary-taxes-heading">
+        <h2 id="salary-taxes-heading">Taxes (Monthly)</h2>
+        <div class="salary-rows">
+          <div class="salary-row">
+            <label for="salary-taxes">Federal + State + FICA</label>
+            <input
+              id="salary-taxes"
+              class="salary-input"
+              type="text"
+              inputmode="decimal"
+              data-salary-field="taxes" />
+          </div>
+        </div>
+        <p class="salary-info-note">
+          <span class="salary-info-icon" aria-hidden="true">ⓘ</span>
+          Get this number from your latest pay stub or payroll software (ADP, Gusto, etc.)
+        </p>
+      </section>
+
+      <!-- Post-Tax Take-Home -->
+      <section class="salary-take-home" id="salary-take-home" aria-live="polite">
+        <span class="salary-take-home-label">Post-Tax Take-Home</span>
+        <span class="salary-take-home-value" id="salary-take-home-value">$0.00</span>
+      </section>
+
     </section>
 
     <!-- Budget page -->
@@ -305,6 +381,7 @@
         <section class="settings-section" aria-labelledby="settings-data-heading">
           <h3 id="settings-data-heading">Data</h3>
           <button class="btn-secondary" id="copy-prev-month-btn"></button>
+          <button class="btn-secondary" id="apply-future-btn"></button>
           <button class="btn-secondary" id="export-btn">Export JSON</button>
           <button class="btn-secondary" id="reset-month-btn">Reset This Month</button>
           <button class="btn-danger" id="clear-data-btn">Clear All Data</button>
