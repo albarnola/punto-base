@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Punto Base Budget</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+  <!-- ===== HEADER ===== -->
+  <header role="banner">
+    <div class="header-inner">
+      <img src="assets/logo.png" alt="Punto Base" class="brand-logo" />
+      <button class="btn-icon" id="settings-toggle" aria-label="Open settings" aria-controls="settings-drawer" aria-expanded="false">
+        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== MAIN CONTENT ===== -->
+  <main id="main-content">
+
+    <!-- Month Picker -->
+    <section class="month-picker-section" aria-label="Month selection">
+      <label for="month-picker" class="sr-only">Select month</label>
+      <input type="month" id="month-picker" name="month-picker" />
+    </section>
+
+    <!-- Income Section -->
+    <section class="budget-section" aria-labelledby="income-heading">
+      <h2 id="income-heading">Income</h2>
+      <div class="table-wrapper">
+        <table aria-labelledby="income-heading">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Expected</th>
+              <th scope="col">Actual</th>
+              <th scope="col">Variance</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="income-body">
+            <!-- rows injected by app.js -->
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="5">
+                <button class="btn-add" data-category="income" aria-label="Add income row">+ Add Row</button>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <!-- Savings & Investments Section -->
+    <section class="budget-section" aria-labelledby="savings-heading">
+      <h2 id="savings-heading">Savings &amp; Investments</h2>
+      <div class="table-wrapper">
+        <table aria-labelledby="savings-heading">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Expected</th>
+              <th scope="col">Actual</th>
+              <th scope="col">Variance</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="savings-body">
+            <!-- rows injected by app.js -->
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="5">
+                <button class="btn-add" data-category="savings" aria-label="Add savings row">+ Add Row</button>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <!-- Fixed Expenses Section -->
+    <section class="budget-section" aria-labelledby="fixed-heading">
+      <h2 id="fixed-heading">Fixed Expenses</h2>
+      <div class="table-wrapper">
+        <table aria-labelledby="fixed-heading">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Expected</th>
+              <th scope="col">Actual</th>
+              <th scope="col">Variance</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="fixed-body">
+            <!-- rows injected by app.js -->
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="5">
+                <button class="btn-add" data-category="fixed" aria-label="Add fixed expense row">+ Add Row</button>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <!-- Variable Expenses Section -->
+    <section class="budget-section" aria-labelledby="variable-heading">
+      <h2 id="variable-heading">Variable Expenses</h2>
+      <div class="table-wrapper">
+        <table aria-labelledby="variable-heading">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Expected</th>
+              <th scope="col">Actual</th>
+              <th scope="col">Variance</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="variable-body">
+            <!-- rows injected by app.js -->
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="5">
+                <button class="btn-add" data-category="variable" aria-label="Add variable expense row">+ Add Row</button>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <!-- Recreational Expenses Section -->
+    <section class="budget-section" aria-labelledby="recreational-heading">
+      <h2 id="recreational-heading">Recreational Expenses</h2>
+      <div class="table-wrapper">
+        <table aria-labelledby="recreational-heading">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Expected</th>
+              <th scope="col">Actual</th>
+              <th scope="col">Variance</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="recreational-body">
+            <!-- rows injected by app.js -->
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="5">
+                <button class="btn-add" data-category="recreational" aria-label="Add recreational expense row">+ Add Row</button>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===== SUMMARY BAR ===== -->
+  <aside class="summary-bar" role="complementary" aria-label="Budget summary">
+    <dl class="summary-grid">
+      <div class="summary-item">
+        <dt>Total Income</dt>
+        <dd id="summary-income">$0.00</dd>
+      </div>
+      <div class="summary-item">
+        <dt>Unallocated</dt>
+        <dd id="summary-unallocated">$0.00</dd>
+        <dd class="summary-insight" id="summary-insight"></dd>
+      </div>
+      <div class="summary-item">
+        <dt>Savings</dt>
+        <dd id="summary-savings">$0.00</dd>
+      </div>
+      <div class="summary-item">
+        <dt>Net</dt>
+        <dd id="summary-net">$0.00</dd>
+      </div>
+    </dl>
+  </aside>
+
+  <!-- ===== SETTINGS DRAWER ===== -->
+  <aside id="settings-drawer" class="settings-drawer" role="dialog" aria-modal="true" aria-label="Settings" hidden>
+    <div class="settings-drawer-inner">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button class="btn-icon" id="settings-close" aria-label="Close settings">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <section aria-labelledby="settings-currency-heading">
+        <h3 id="settings-currency-heading">Currency</h3>
+        <label for="currency-select">Display currency</label>
+        <select id="currency-select">
+          <option value="USD">USD — US Dollar</option>
+          <option value="EUR">EUR — Euro</option>
+          <option value="MXN">MXN — Mexican Peso</option>
+        </select>
+      </section>
+      <section aria-labelledby="settings-data-heading">
+        <h3 id="settings-data-heading">Data</h3>
+        <button class="btn-secondary" id="export-btn">Export JSON</button>
+        <button class="btn-danger" id="clear-data-btn">Clear All Data</button>
+      </section>
+    </div>
+  </aside>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
