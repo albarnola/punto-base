@@ -993,32 +993,6 @@ income:            'Income',
   }
 
   // ============================================================
-  // SETTINGS DRAWER
-  // ============================================================
-  let backdrop = null;
-
-  function openDrawer() {
-    const drawer = document.getElementById('settings-drawer');
-    if (!drawer) return;
-    drawer.removeAttribute('hidden');
-    if (!backdrop) {
-      backdrop = el('div', { className: 'drawer-backdrop' });
-      backdrop.addEventListener('click', closeDrawer);
-      document.body.appendChild(backdrop);
-    }
-    requestAnimationFrame(() => backdrop.classList.add('visible'));
-    document.getElementById('settings-toggle')?.setAttribute('aria-expanded', 'true');
-    document.getElementById('settings-close')?.focus();
-  }
-
-  function closeDrawer() {
-    document.getElementById('settings-drawer')?.setAttribute('hidden', '');
-    backdrop?.classList.remove('visible');
-    document.getElementById('settings-toggle')?.setAttribute('aria-expanded', 'false');
-    document.getElementById('settings-toggle')?.focus();
-  }
-
-  // ============================================================
   // INLINE CONFIRMATION
   // ============================================================
   function confirmInline(btn, message, onConfirm) {
@@ -1129,7 +1103,6 @@ income:            'Income',
     expandedRows.clear();
     saveState();
     renderAll();
-    closeDrawer();
   }
 
   // ============================================================
@@ -1155,61 +1128,47 @@ income:            'Income',
     set('txndate-select',   state.settings.defaultTransactionDate ?? 'today');
   }
 
-  function buildSettingsDrawerContent() {
-    const drawer = document.getElementById('settings-drawer');
-    if (!drawer) return;
-    const inner = drawer.querySelector('.settings-drawer-inner');
-    if (!inner) return;
+  // ============================================================
+  // NAVIGATION
+  // ============================================================
+  const VALID_PAGES = ['dashboard', 'budget', 'investing', 'settings'];
 
-    // Number format section
-    if (!drawer.querySelector('#format-section')) {
-      const sec = el('section', { id: 'format-section', 'aria-labelledby': 'settings-format-heading' });
-      sec.appendChild(el('h3', { id: 'settings-format-heading', textContent: 'Number Format' }));
-      sec.appendChild(el('label', { for: 'format-select', textContent: 'Format' }));
-      const sel = el('select', { id: 'format-select' });
-      sel.appendChild(el('option', { value: 'us', textContent: '1,234.56 (US)' }));
-      sel.appendChild(el('option', { value: 'eu', textContent: '1.234,56 (EU)' }));
-      sec.appendChild(sel);
-      drawer.querySelector('section[aria-labelledby="settings-currency-heading"]')
-        ?.insertAdjacentElement('afterend', sec);
-    }
+  function showPage(pageName) {
+    if (!VALID_PAGES.includes(pageName)) pageName = 'budget';
 
-    // Default transaction date section
-    if (!drawer.querySelector('#txndate-section')) {
-      const sec = el('section', { id: 'txndate-section', 'aria-labelledby': 'settings-txndate-heading' });
-      sec.appendChild(el('h3', { id: 'settings-txndate-heading', textContent: 'Default Transaction Date' }));
-      sec.appendChild(el('label', { for: 'txndate-select', textContent: 'Date defaults to' }));
-      const sel = el('select', { id: 'txndate-select' });
-      sel.appendChild(el('option', { value: 'today', textContent: 'Today' }));
-      sel.appendChild(el('option', { value: 'first', textContent: 'First of month' }));
-      sec.appendChild(sel);
-      (drawer.querySelector('#format-section') ?? inner).insertAdjacentElement('afterend', sec);
-    }
+    VALID_PAGES.forEach(p => {
+      document.getElementById(`page-${p}`)?.classList.add('page-hidden');
+    });
+    document.getElementById(`page-${pageName}`)?.classList.remove('page-hidden');
 
-    // Data section
-    const dataSec = drawer.querySelector('[aria-labelledby="settings-data-heading"]');
-    if (dataSec) {
-      dataSec.innerHTML = '';
-      dataSec.appendChild(el('h3', { id: 'settings-data-heading', textContent: 'Data' }));
-      dataSec.appendChild(el('button', { className: 'btn-secondary', id: 'copy-prev-month-btn', textContent: '' }));
-      dataSec.appendChild(el('button', { className: 'btn-secondary', id: 'export-btn',          textContent: T('exportJson')  }));
-      dataSec.appendChild(el('button', { className: 'btn-secondary', id: 'reset-month-btn',     textContent: T('resetMonth')  }));
-      dataSec.appendChild(el('button', { className: 'btn-danger',    id: 'clear-data-btn',      textContent: T('clearAll')    }));
-    }
+    document.querySelectorAll('.sidebar-item[data-page]').forEach(item => {
+      const isActive = item.dataset.page === pageName;
+      item.classList.toggle('sidebar-item--active', isActive);
+      item.setAttribute('aria-current', isActive ? 'page' : 'false');
+    });
+
+    history.replaceState(null, '', `#${pageName}`);
+  }
+
+  function initNav() {
+    const hash = window.location.hash.slice(1);
+    showPage(VALID_PAGES.includes(hash) ? hash : 'budget');
+
+    document.querySelectorAll('.sidebar-item[data-page]').forEach(item => {
+      item.addEventListener('click', e => {
+        e.preventDefault();
+        showPage(item.dataset.page);
+      });
+    });
   }
 
   // ============================================================
   // BIND EVENTS
   // ============================================================
   function bindEvents() {
-    document.getElementById('settings-toggle')?.addEventListener('click', openDrawer);
-    document.getElementById('settings-close')?.addEventListener('click', closeDrawer);
-
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape') {
-        if (monthDropdownEl) { closeMonthDropdown(); return; }
-        const drawer = document.getElementById('settings-drawer');
-        if (drawer && !drawer.hasAttribute('hidden')) closeDrawer();
+        if (monthDropdownEl) { closeMonthDropdown(); }
         return;
       }
 
@@ -1296,11 +1255,11 @@ income:            'Income',
   // ============================================================
   function init() {
     initState();
-    buildSettingsDrawerContent();
     syncSettingsUI();
     buildMonthPicker();
     renderAll();
     bindEvents();
+    initNav();
   }
 
   if (document.readyState === 'loading') {
