@@ -67,6 +67,9 @@ income:            'Income',
 
   const CURRENCY_SYMBOLS = { USD: '$', EUR: '€', MXN: '$', GBP: '£' };
 
+  // Mobile viewport — used to drop decimals from monetary displays on narrow screens
+  const MOBILE_MQL = window.matchMedia('(max-width: 767px)');
+
   // ============================================================
   // STATE
   // ============================================================
@@ -207,9 +210,10 @@ income:            'Income',
     const { currency, numberFormat } = state.settings;
     const sym    = CURRENCY_SYMBOLS[currency] ?? '$';
     const locale = numberFormat === 'eu' ? 'de-DE' : 'en-US';
+    const digits = MOBILE_MQL.matches ? 0 : 2;
     const formatted = Math.abs(amount).toLocaleString(locale, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
     });
     return (amount < 0 ? '-' : '') + sym + formatted;
   }
@@ -403,13 +407,20 @@ income:            'Income',
       textContent:     isExpanded ? '▾' : '▸',
     });
 
-    const nameInput = el('input', {
-      type:         'text',
-      value:         row.name,
+    const isMobile = MOBILE_MQL.matches;
+    const nameInput = el(isMobile ? 'textarea' : 'input', {
       placeholder:   T('namePlaceholder'),
       'aria-label':  `Name for ${row.name || 'new row'}`,
       'data-field':  'name',
+      ...(isMobile ? { rows: '1' } : { type: 'text' }),
     });
+    nameInput.value = row.name;
+    if (isMobile) {
+      // Enter blurs the field instead of inserting a newline (names are single-value)
+      nameInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); nameInput.blur(); }
+      });
+    }
 
     const nameCell = el('div', { className: 'name-cell' });
     nameCell.appendChild(chevron);
@@ -1158,8 +1169,73 @@ income:            'Income',
       item.addEventListener('click', e => {
         e.preventDefault();
         showPage(item.dataset.page);
+        closeMobileSidebar();
       });
     });
+  }
+
+  // ============================================================
+  // SIDEBAR (collapse on desktop, overlay on mobile)
+  // ============================================================
+  const SIDEBAR_LS_KEY = 'sidebarState';
+
+  function isSidebarCollapsed() {
+    return document.documentElement.classList.contains('sidebar-collapsed');
+  }
+
+  function isMobileSidebarOpen() {
+    return document.documentElement.classList.contains('sidebar-mobile-open');
+  }
+
+  function syncSidebarToggleLabel() {
+    const btn = document.getElementById('sidebar-toggle-btn');
+    if (!btn) return;
+    btn.setAttribute('aria-label', isSidebarCollapsed() ? 'Expand sidebar' : 'Collapse sidebar');
+  }
+
+  function syncHamburgerLabel() {
+    const btn = document.getElementById('hamburger-btn');
+    if (!btn) return;
+    btn.setAttribute('aria-label', isMobileSidebarOpen() ? 'Close menu' : 'Open menu');
+  }
+
+  function setSidebarCollapsed(collapsed) {
+    document.documentElement.classList.toggle('sidebar-collapsed', collapsed);
+    try { localStorage.setItem(SIDEBAR_LS_KEY, collapsed ? 'collapsed' : 'expanded'); } catch {}
+    syncSidebarToggleLabel();
+  }
+
+  function openMobileSidebar() {
+    document.documentElement.classList.add('sidebar-mobile-open');
+    syncHamburgerLabel();
+  }
+
+  function closeMobileSidebar() {
+    document.documentElement.classList.remove('sidebar-mobile-open');
+    syncHamburgerLabel();
+  }
+
+  function initSidebar() {
+    // Initial label sync (collapsed class may already be present from inline anti-FOUC script)
+    syncSidebarToggleLabel();
+    syncHamburgerLabel();
+
+    document.getElementById('sidebar-toggle-btn')
+      ?.addEventListener('click', () => setSidebarCollapsed(!isSidebarCollapsed()));
+
+    document.getElementById('hamburger-btn')
+      ?.addEventListener('click', () => {
+        isMobileSidebarOpen() ? closeMobileSidebar() : openMobileSidebar();
+      });
+
+    document.getElementById('mobile-backdrop')
+      ?.addEventListener('click', closeMobileSidebar);
+
+    // Resize past the 768px breakpoint → mobile-open state no longer applies
+    const mql = window.matchMedia('(min-width: 768px)');
+    const onMqlChange = e => { if (e.matches) closeMobileSidebar(); };
+    if (mql.addEventListener) mql.addEventListener('change', onMqlChange);
+    else mql.addListener(onMqlChange); // older Safari
   }
 
   // ============================================================
@@ -1196,7 +1272,7 @@ income:            'Income',
 
     // Track edits to name / expected inputs for undo (capture pre-edit snapshot on focus)
     main?.addEventListener('focusin', e => {
-      const input = e.target.closest('input[data-field]');
+      const input = e.target.closest('[data-field]');
       if (!input) return;
       const tr = input.closest('tr[data-id]');
       if (!tr) return;
@@ -1212,7 +1288,7 @@ income:            'Income',
     });
 
     main?.addEventListener('focusout', e => {
-      const input = e.target.closest('input[data-field]');
+      const input = e.target.closest('[data-field]');
       if (!input) return;
       const tr = input.closest('tr[data-id]');
       if (!tr) return;
@@ -1260,6 +1336,12 @@ income:            'Income',
     renderAll();
     bindEvents();
     initNav();
+    initSidebar();
+
+    // Re-render when crossing the mobile breakpoint so currency formatting refreshes
+    const onBreakpointChange = () => renderAll();
+    if (MOBILE_MQL.addEventListener) MOBILE_MQL.addEventListener('change', onBreakpointChange);
+    else MOBILE_MQL.addListener(onBreakpointChange); // older Safari
   }
 
   if (document.readyState === 'loading') {

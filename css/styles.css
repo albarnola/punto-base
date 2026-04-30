@@ -54,8 +54,10 @@
   /* Layout */
   --header-height:       60px;
   --summary-bar-height:  96px;
-  --sidebar-width:       240px;
-  --content-max-width:   900px;
+  --sidebar-width:           240px;
+  --sidebar-collapsed-width: 64px;
+  --sidebar-mobile-width:    280px;
+  --content-max-width:       900px;
 
   /* Radii */
   --radius-sm:  4px;
@@ -937,8 +939,12 @@ tfoot td {
 }
 
 .sidebar-brand {
-  padding: var(--space-5) var(--space-5) var(--space-4);
+  padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
 }
 
 .sidebar-brand-text {
@@ -990,20 +996,100 @@ tfoot td {
 }
 
 /* ============================================================
-   RESPONSIVE — MOBILE
+   SIDEBAR TOGGLE & HAMBURGER
    ============================================================ */
-@media (max-width: 600px) {
+.sidebar-toggle {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  color: var(--color-text-muted);
+}
+
+.sidebar-toggle:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--color-text);
+}
+
+.sidebar-toggle-icon {
+  transition: transform 200ms ease;
+}
+
+.hamburger-button {
+  display: none;
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* ============================================================
+   MOBILE BACKDROP
+   ============================================================ */
+.mobile-backdrop {
+  position: fixed;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 195;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 250ms ease, visibility 250ms;
+}
+
+/* ============================================================
+   SIDEBAR COLLAPSE (DESKTOP ≥768px)
+   ============================================================ */
+@media (min-width: 768px) {
+  .brand-logo { height: 52px; }
+
+  /* Transitions only on desktop — avoids resize artifacts on mobile */
+  .sidebar      { transition: width 200ms ease; }
+  body          { transition: padding-left 200ms ease; }
+  .summary-bar  { transition: left 200ms ease; }
+
+  html.sidebar-collapsed .sidebar           { width: var(--sidebar-collapsed-width); }
+  html.sidebar-collapsed body               { padding-left: var(--sidebar-collapsed-width); }
+  html.sidebar-collapsed .summary-bar       { left: var(--sidebar-collapsed-width); }
+  html.sidebar-collapsed .nav-label         { display: none; }
+  html.sidebar-collapsed .sidebar-brand-text { display: none; }
+  html.sidebar-collapsed .sidebar-brand     {
+    justify-content: center;
+    padding: var(--space-3) var(--space-2);
+  }
+  html.sidebar-collapsed .sidebar-toggle-icon { transform: rotate(180deg); }
+  html.sidebar-collapsed .sidebar-item {
+    justify-content: center;
+    padding: var(--space-3) 0;
+    gap: 0;
+  }
+}
+
+/* ============================================================
+   RESPONSIVE — MOBILE (<768px)
+   ============================================================ */
+@media (max-width: 767px) {
+  /* Sidebar becomes a slide-in overlay */
   .sidebar {
-    display: none;
+    width: var(--sidebar-mobile-width);
+    transform: translateX(-100%);
+    transition: transform 250ms ease;
+    z-index: 200;
   }
 
-  body {
-    padding-left: 0;
+  html.sidebar-mobile-open .sidebar { transform: translateX(0); }
+
+  html.sidebar-mobile-open .mobile-backdrop {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
   }
 
-  .summary-bar {
-    left: 0;
-  }
+  body         { padding-left: 0; }
+  .summary-bar { left: 0; }
+
+  .hamburger-button { display: inline-flex; }
+  .sidebar-toggle   { display: none; }
 
   .transaction-add-form {
     flex-direction: column;
@@ -1045,24 +1131,97 @@ tfoot td {
     max-width: 30vw;
   }
 
-  /* Condense table padding on small screens */
+  /* Tighter table padding & font on small screens */
   thead th,
   tbody td,
   tfoot td {
-    padding: var(--space-2) var(--space-3);
+    padding: 10px 8px;
   }
 
-  /* Name column stays flexible; number columns get a min-width */
+  tbody td,
+  tbody td:nth-child(n+2):nth-child(-n+4),
+  tbody td input[type="text"],
+  tbody td input[type="number"] {
+    font-size: 0.8125rem;
+  }
+
+  .budget-section h2 {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  /* Compact chevron inside the Name cell */
+  .btn-chevron {
+    width: 24px;
+    min-width: 24px;
+  }
+
+  /* Name column: minimum width to fit short names; allow wrapping for long ones */
+  thead th:first-child,
+  tbody tr:not(.transaction-panel) > td:first-child {
+    width: auto;
+    min-width: 130px;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  /* Mobile name field: textarea so long names wrap to multiple lines */
+  .name-cell textarea {
+    flex: 1;
+    min-width: 0;
+    resize: none;
+    field-sizing: content;
+    line-height: 1.3;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    overflow: hidden;
+    display: block;
+    font-family: inherit;
+    font-size: 0.8125rem;
+    color: var(--color-text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+  }
+
+  .name-cell textarea:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-alt);
+  }
+
+  .name-cell textarea:focus {
+    outline: none;
+    border-color: var(--color-brand);
+    background: var(--color-surface);
+    box-shadow: 0 0 0 2px rgb(74 164 141 / .18);
+  }
+
+  /* Numeric columns: minimum width, right-aligned */
   thead th:nth-child(n+2):nth-child(-n+4),
   tbody td:nth-child(n+2):nth-child(-n+4) {
-    min-width: 72px;
+    min-width: 70px;
+    text-align: right;
   }
 
-}
+  /* Hide row-action buttons by default; reveal when row is expanded */
+  thead th:last-child,
+  tbody tr:not(.transaction-panel) > td:last-child {
+    width: 0;
+    padding: 0;
+  }
 
-@media (min-width: 601px) {
-  .brand-logo {
-    height: 52px;
+  tbody tr:not(.transaction-panel) > td:last-child .row-actions {
+    display: none;
+  }
+
+  tbody tr.row-expanded > td:last-child {
+    width: auto;
+    padding: 10px 8px;
+  }
+
+  tbody tr.row-expanded > td:last-child .row-actions {
+    display: inline-flex;
   }
 }
 
