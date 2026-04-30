@@ -106,6 +106,12 @@
         <label for="month-picker-salary" class="sr-only">Select month</label>
       </section>
 
+      <!-- Apply to future months -->
+      <section class="salary-apply-future" aria-label="Apply this month forward">
+        <button class="btn-secondary" id="salary-apply-future-btn" type="button"></button>
+        <p class="salary-apply-note">Overwrites future months even if they've been manually edited.</p>
+      </section>
+
       <!-- Gross Compensation -->
       <section class="salary-section" aria-labelledby="salary-gross-heading">
         <h2 id="salary-gross-heading">Gross Compensation</h2>
@@ -202,6 +208,28 @@
         </div>
       </section>
 
+      <!-- Pre-Tax Investments Section -->
+      <section class="budget-section" id="pretax-investments-section" aria-labelledby="pretax-investments-heading">
+        <h2 id="pretax-investments-heading">Pre-Tax Investments</h2>
+        <p class="section-note">Informational only — does not affect Unallocated.</p>
+        <div class="table-wrapper">
+          <table aria-labelledby="pretax-investments-heading">
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Expected</th>
+                <th scope="col">Actual</th>
+                <th scope="col">Variance</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="pretax-investments-body">
+              <!-- rows injected by app.js -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Savings & Investments Section -->
       <section class="budget-section" aria-labelledby="savings-heading">
         <h2 id="savings-heading">Savings &amp; Investments</h2>
@@ -233,6 +261,7 @@
       <!-- Fixed Expenses Section -->
       <section class="budget-section" aria-labelledby="fixed-heading">
         <h2 id="fixed-heading">Fixed Expenses</h2>
+        <p class="section-note">Pre-tax deductions are tracked on the Salary tab and are not included here.</p>
         <div class="table-wrapper">
           <table aria-labelledby="fixed-heading">
             <thead>
@@ -329,6 +358,10 @@
           <div class="summary-item">
             <dt>Savings</dt>
             <dd id="summary-savings">$0.00</dd>
+          </div>
+          <div class="summary-item">
+            <dt>Investments</dt>
+            <dd id="summary-investments">$0.00</dd>
           </div>
           <div class="summary-item">
             <dt>Net</dt>

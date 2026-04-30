@@ -58,7 +58,6 @@ income:            'Income',
     ],
     recreational: [{ name: 'Dates' }, { name: 'Drinks' }, { name: 'Travel' }],
     savings: [
-      { name: '401k Contribution' },
       { name: 'Roth IRA Contribution' },
       { name: 'Taxable Brokerage' },
       { name: 'Emergency Fund' },
@@ -93,24 +92,67 @@ income:            'Income',
   }
 
   function newRow(name = '', expected = 0, order = 0) {
-    return { id: crypto.randomUUID(), name, expected, order, transactions: [] };
+    return {
+      id:           crypto.randomUUID(),
+      name,
+      expected,
+      order,
+      transactions: [],
+      adjustments:  [],
+    };
   }
 
   function newTransaction(amount, date, note = '') {
     return { id: crypto.randomUUID(), date, amount, note };
   }
 
-  function newDeduction(name = '', amount = 0) {
-    return { id: crypto.randomUUID(), name, amount };
+  function newAdjustment(amount = 0, note = '') {
+    return { id: crypto.randomUUID(), amount, note };
+  }
+
+  const DEDUCTION_TYPES = ['investment', 'expense'];
+  const EXPENSE_NAME_KEYWORDS = ['insurance', 'dental', 'vision', 'commuter', 'transit'];
+
+  // Sub-types for rows in the Savings & Investments section.
+  const SUBTYPES = ['investment', 'savings'];
+  const SAVINGS_NAME_KEYWORDS = ['fund', 'savings'];
+
+  function inferSubtype(name) {
+    const lower = (name || '').toLowerCase();
+    return SAVINGS_NAME_KEYWORDS.some(k => lower.includes(k)) ? 'savings' : 'investment';
+  }
+
+  function normalizeSubtype(subtype, name) {
+    if (SUBTYPES.includes(subtype)) return subtype;
+    return inferSubtype(name);
+  }
+
+  function inferDeductionType(name) {
+    const lower = (name || '').toLowerCase();
+    return EXPENSE_NAME_KEYWORDS.some(k => lower.includes(k)) ? 'expense' : 'investment';
+  }
+
+  function normalizeDeductionType(type, name) {
+    if (DEDUCTION_TYPES.includes(type)) return type;
+    return inferDeductionType(name);
+  }
+
+  function newDeduction(name = '', amount = 0, type = 'investment') {
+    return {
+      id:     crypto.randomUUID(),
+      name,
+      amount,
+      type:   normalizeDeductionType(type, name),
+    };
   }
 
   function defaultSalaryData() {
     return {
       annualGross: 0,
       deductions: [
-        newDeduction('401(k) Contribution', 0),
-        newDeduction('Health Insurance',    0),
-        newDeduction('HSA',                 0),
+        newDeduction('401(k) Contribution', 0, 'investment'),
+        newDeduction('Health Insurance',    0, 'expense'),
+        newDeduction('HSA',                 0, 'investment'),
       ],
       taxes: 0,
       salarySource: 'manual',
@@ -120,7 +162,9 @@ income:            'Income',
   function cloneSalaryData(src, salarySource = 'inherited') {
     return {
       annualGross: parseAmount(src.annualGross),
-      deductions: (src.deductions || []).map(d => newDeduction(d.name, parseAmount(d.amount))),
+      deductions: (src.deductions || []).map(d =>
+        newDeduction(d.name, parseAmount(d.amount), normalizeDeductionType(d.type, d.name))
+      ),
       taxes: parseAmount(src.taxes),
       salarySource,
     };
@@ -128,24 +172,32 @@ income:            'Income',
 
   function defaultMonthData(priorMonth = null) {
     if (priorMonth) {
-      const copyRows = list => list.map((r, i) => newRow(r.name, r.expected, r.order ?? i));
+      // Carry over name/expected/order/subtype to the new month — actuals
+      // (transactions) and adjustments are intentionally per-month and reset.
+      const copyRows = list => list.map((r, i) => {
+        const nr = newRow(r.name, r.expected, r.order ?? i);
+        if (r.subtype) nr.subtype = r.subtype;
+        return nr;
+      });
       return {
         income: copyRows(priorMonth.income),
         categories: {
-          fixed:        copyRows(priorMonth.categories.fixed),
-          variable:     copyRows(priorMonth.categories.variable),
-          recreational: copyRows(priorMonth.categories.recreational),
-          savings:      copyRows(priorMonth.categories.savings || []),
+          fixed:             copyRows(priorMonth.categories.fixed),
+          variable:          copyRows(priorMonth.categories.variable),
+          recreational:      copyRows(priorMonth.categories.recreational),
+          savings:           copyRows(priorMonth.categories.savings || []),
+          pretaxInvestments: [],
         },
       };
     }
     return {
       income: DEFAULTS.income.map((d, i) => newRow(d.name, 0, i)),
       categories: {
-        fixed:        DEFAULTS.fixed.map((d, i) => newRow(d.name, 0, i)),
-        variable:     DEFAULTS.variable.map((d, i) => newRow(d.name, 0, i)),
-        recreational: DEFAULTS.recreational.map((d, i) => newRow(d.name, 0, i)),
-        savings:      DEFAULTS.savings.map((d, i) => newRow(d.name, 0, i)),
+        fixed:             DEFAULTS.fixed.map((d, i) => newRow(d.name, 0, i)),
+        variable:          DEFAULTS.variable.map((d, i) => newRow(d.name, 0, i)),
+        recreational:      DEFAULTS.recreational.map((d, i) => newRow(d.name, 0, i)),
+        savings:           DEFAULTS.savings.map((d, i) => newRow(d.name, 0, i)),
+        pretaxInvestments: [],
       },
     };
   }
@@ -168,11 +220,23 @@ income:            'Income',
     if (!s.settings) s.settings = {};
     if (!s.settings.defaultTransactionDate) s.settings.defaultTransactionDate = 'today';
     if (!s.salaryData) s.salaryData = {};
+    // Backfill `type` on deductions saved before the investment/expense split.
+    for (const rec of Object.values(s.salaryData)) {
+      if (!rec || !Array.isArray(rec.deductions)) continue;
+      for (const ded of rec.deductions) {
+        if (!DEDUCTION_TYPES.includes(ded.type)) {
+          ded.type = inferDeductionType(ded.name);
+        }
+      }
+    }
     for (const [monthKey, md] of Object.entries(s.months || {})) {
       if (!md) continue;
       (md.income || []).forEach(r => migrateRow(r, monthKey));
       if (md.categories && !md.categories.savings) {
         md.categories.savings = DEFAULTS.savings.map((d, i) => newRow(d.name, 0, i));
+      }
+      if (md.categories && !md.categories.pretaxInvestments) {
+        md.categories.pretaxInvestments = [];
       }
       for (const list of Object.values(md.categories || {})) {
         (list || []).forEach(r => migrateRow(r, monthKey));
@@ -184,6 +248,25 @@ income:            'Income',
       (md.income || []).forEach((r, i) => { if (r.order === undefined) r.order = i; });
       for (const list of Object.values(md.categories || {})) {
         (list || []).forEach((r, i) => { if (r.order === undefined) r.order = i; });
+      }
+    }
+    // Backfill `adjustments` on every row (used by linked rows).
+    for (const md of Object.values(s.months || {})) {
+      if (!md) continue;
+      const allLists = [md.income || [], ...Object.values(md.categories || {})];
+      for (const list of allLists) {
+        for (const row of list || []) {
+          if (!Array.isArray(row.adjustments)) row.adjustments = [];
+        }
+      }
+    }
+    // Backfill `subtype` on Savings & Investments rows.
+    for (const md of Object.values(s.months || {})) {
+      const savings = md?.categories?.savings || [];
+      for (const row of savings) {
+        if (!SUBTYPES.includes(row.subtype)) {
+          row.subtype = inferSubtype(row.name);
+        }
       }
     }
   }
@@ -283,6 +366,26 @@ income:            'Income',
     return (row.transactions || []).reduce((acc, t) => acc + parseAmount(t.amount), 0);
   }
 
+  function sumAdjustments(row) {
+    return (row.adjustments || []).reduce((acc, a) => acc + parseAmount(a.amount), 0);
+  }
+
+  // Linked savings/fixed rows: Actual = linked Expected (from Salary) + sum of adjustments.
+  // All other rows (including the linked income row): Actual = sum of transactions.
+  function getActual(row, section, monthKey = currentMonth) {
+    if (isLinkedAdjustableRow(row, section, monthKey)) {
+      return getLinkedExpected(row, section, monthKey) + sumAdjustments(row);
+    }
+    return sumTransactions(row);
+  }
+
+  // Linked rows that use the adjustments mechanism (Pre-Tax Investments only).
+  // The income Salary row is linked but keeps editable transactions per stage 2.
+  function isLinkedAdjustableRow(row, section, monthKey = currentMonth) {
+    if (section !== 'pretaxInvestments') return false;
+    return isLinkedRow(row, section, monthKey);
+  }
+
   function sumListExpected(list) {
     return list.reduce((acc, r) => acc + parseAmount(r.expected), 0);
   }
@@ -291,29 +394,245 @@ income:            'Income',
     return list.reduce((acc, r) => acc + sumTransactions(r), 0);
   }
 
-  function computeSummary(monthData) {
-    const incomeExp   = sumListExpected(monthData.income);
-    const incomeAct   = sumListActual(monthData.income);
-    const cats        = monthData.categories;
-    const expRows     = [...cats.fixed, ...cats.variable, ...cats.recreational];
-    const savRows     = cats.savings || [];
-    const expExp      = sumListExpected(expRows);
-    const expAct      = sumListActual(expRows);
-    const savExp      = sumListExpected(savRows);
-    const savAct      = sumListActual(savRows);
-    const allocatedExp = expExp + savExp;
+  function computeSummary(monthData, monthKey = currentMonth) {
+    const salaryActive = isSalaryActive(monthKey);
+    const takeHome     = getSalaryTakeHomeForMonth(monthKey);
+
+    const incomeExp = monthData.income.reduce((acc, r) =>
+      acc + getEffectiveExpected(r, 'income', monthKey), 0);
+    const incomeAct = sumListActual(monthData.income);
+
+    const cats             = monthData.categories;
+    const fixedRows        = cats.fixed             || [];
+    const variableRows     = cats.variable          || [];
+    const recreationalRows = cats.recreational      || [];
+    const savRows          = cats.savings           || [];
+    const pretaxRows       = cats.pretaxInvestments || [];
+
+    // Savings & Investments and the expense sections are post-tax only now —
+    // every row's expected/actual comes from user input, no linked deductions.
+    const fixedExp        = sumListExpected(fixedRows);
+    const variableExp     = sumListExpected(variableRows);
+    const recreationalExp = sumListExpected(recreationalRows);
+    const savExp          = sumListExpected(savRows);
+
+    const fixedAct        = sumListActual(fixedRows);
+    const variableAct     = sumListActual(variableRows);
+    const recreationalAct = sumListActual(recreationalRows);
+    const savAct          = sumListActual(savRows);
+
+    // SAVINGS / INVESTMENTS subtype-based actual sums (Savings & Investments).
+    const savingsBySubtype = (subtype) => savRows.reduce((acc, r) =>
+      acc + (getRowSubtype(r, 'savings', monthKey) === subtype ? sumTransactions(r) : 0), 0);
+    const savingsActSubtype     = savingsBySubtype('savings');
+    const investmentsActSubtype = savingsBySubtype('investment');
+
+    // Pre-Tax Investments: actual = linked Expected + adjustments. Display-only
+    // section — completely excluded from UNALLOCATED and NET subtractions.
+    const pretaxAct = pretaxRows.reduce((acc, r) =>
+      acc + getActual(r, 'pretaxInvestments', monthKey), 0);
+
+    const expensesExp = fixedExp + variableExp + recreationalExp;
+    const expensesAct = fixedAct + variableAct + recreationalAct;
+    const allocatedExp = expensesExp + savExp;
+
+    // UNALLOCATED — Take-Home (or manual income fallback) minus all post-tax
+    // expected. Pre-Tax Investments are NOT subtracted: that money is already
+    // deducted from gross before take-home is computed.
+    const incomeBasis = salaryActive ? takeHome : incomeExp;
+    const unallocated = incomeBasis - allocatedExp;
+
+    // NET — Take-Home (or manual income fallback) minus post-tax actuals.
+    // Pre-Tax Investments are NOT subtracted (already in take-home).
+    const netActual = incomeBasis - expensesAct - savAct;
+
     return {
-      incomeExpected:    incomeExp,
-      incomeActual:      incomeAct,
-      expensesExpected:  expExp,
-      expensesActual:    expAct,
-      savingsExpected:   savExp,
-      savingsActual:     savAct,
-      allocatedExpected: allocatedExp,
-      unallocated:       incomeExp - allocatedExp,
-      netExpected:       incomeExp - expExp - savExp,
-      netActual:         incomeAct - expAct - savAct,
+      incomeExpected:     incomeExp,
+      incomeActual:       incomeAct,
+      expensesExpected:   expensesExp,
+      expensesActual:     expensesAct,
+      savingsExpected:    savExp,
+      savingsExpectedAll: savExp,
+      savingsActual:      savingsActSubtype,                  // SAVINGS tile
+      investmentsActual:  investmentsActSubtype + pretaxAct,  // INVESTMENTS tile (post-tax + pre-tax)
+      allocatedExpected:  allocatedExp,
+      unallocated:        unallocated,
+      netExpected:        incomeExp - allocatedExp,
+      netActual:          netActual,
     };
+  }
+
+  // ============================================================
+  // SALARY ↔ BUDGET LINKING
+  // ============================================================
+  const SALARY_INCOME_LABEL = 'Salary';
+  // Pre-tax investment deductions populate the Pre-Tax Investments section.
+  // Pre-tax expense deductions live ONLY on the Salary tab — no Budget row.
+  const LINKED_SECTION_BY_TYPE = { investment: 'pretaxInvestments' };
+  const TYPE_BY_LINKED_SECTION = { pretaxInvestments: 'investment' };
+
+  function getSalaryDeductionsForMonth(monthKey) {
+    return state.salaryData?.[monthKey]?.deductions || [];
+  }
+
+  function getSalaryTakeHomeForMonth(monthKey) {
+    const rec = state.salaryData?.[monthKey];
+    if (!rec) return 0;
+    return computeTakeHome(rec);
+  }
+
+  // Salary linking only applies when there's positive take-home — otherwise we
+  // fall back to manual income on the Budget page (per spec).
+  function isSalaryActive(monthKey = currentMonth) {
+    return getSalaryTakeHomeForMonth(monthKey) > 0;
+  }
+
+  function findSalaryDeductionByName(name, monthKey, requiredType = null) {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return null;
+    const matches = getSalaryDeductionsForMonth(monthKey)
+      .filter(d => (d.name || '').trim() === trimmed);
+    if (matches.length === 0) return null;
+    if (requiredType) {
+      return matches.find(d => normalizeDeductionType(d.type, d.name) === requiredType) || null;
+    }
+    return matches[0];
+  }
+
+  function isLinkedIncomeRow(row) {
+    return (row?.name || '').trim() === SALARY_INCOME_LABEL;
+  }
+
+  function getLinkedExpected(row, section, monthKey = currentMonth) {
+    if (!row) return null;
+    if (!isSalaryActive(monthKey)) return null;
+    if (section === 'income' && isLinkedIncomeRow(row)) {
+      return getSalaryTakeHomeForMonth(monthKey);
+    }
+    const requiredType = TYPE_BY_LINKED_SECTION[section];
+    if (requiredType) {
+      const ded = findSalaryDeductionByName(row.name, monthKey, requiredType);
+      if (ded) return parseAmount(ded.amount);
+    }
+    return null;
+  }
+
+  function getEffectiveExpected(row, section, monthKey = currentMonth) {
+    const linked = getLinkedExpected(row, section, monthKey);
+    return linked !== null ? linked : parseAmount(row.expected);
+  }
+
+  function isLinkedRow(row, section, monthKey = currentMonth) {
+    return getLinkedExpected(row, section, monthKey) !== null;
+  }
+
+  // Subtype only applies to rows in the Savings & Investments section,
+  // which is post-tax-only — every row is user-owned.
+  function getRowSubtype(row, section, monthKey = currentMonth) {
+    if (section !== 'savings' || !row) return null;
+    return normalizeSubtype(row.subtype, row.name);
+  }
+
+  // Sync the budget against the salary deductions for the given month.
+  // - Investment deductions back linked rows in the Pre-Tax Investments section.
+  // - Expense deductions are NOT rendered on the Budget page at all — they
+  //   live only on the Salary tab.
+  // - Auto-creates rows for new investment deductions, removes rows whose
+  //   deduction was removed or whose type was changed to expense.
+  // - Migrates any legacy linked rows still living in savings/fixed: investment
+  //   ones move to Pre-Tax Investments (preserving their adjustments); expense
+  //   ones are dropped from the Budget page entirely.
+  function syncBudgetWithSalary(monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    if (!md.categories) md.categories = {};
+    if (!md.categories.savings)           md.categories.savings           = [];
+    if (!md.categories.fixed)             md.categories.fixed             = [];
+    if (!md.categories.pretaxInvestments) md.categories.pretaxInvestments = [];
+
+    const allDeductions = isSalaryActive(monthKey)
+      ? getSalaryDeductionsForMonth(monthKey).filter(d => (d.name || '').trim() !== '')
+      : [];
+    const investmentDeductions = allDeductions.filter(
+      d => normalizeDeductionType(d.type, d.name) === 'investment'
+    );
+    const investmentNames = new Set(
+      investmentDeductions.map(d => (d.name || '').trim())
+    );
+
+    // Migration: any legacy linked rows in savings/fixed need to leave those
+    // sections (they're now post-tax-only). Investment-matching rows move to
+    // pretaxInvestments to preserve adjustments; everything else is dropped.
+    const relocateOut = (list) => {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const row = list[i];
+        if (!row.linkedToSalary) continue;
+        list.splice(i, 1);
+        const name = (row.name || '').trim();
+        if (investmentNames.has(name) &&
+            !md.categories.pretaxInvestments.some(p => (p.name || '').trim() === name)) {
+          md.categories.pretaxInvestments.push(row);
+        }
+      }
+    };
+    relocateOut(md.categories.savings);
+    relocateOut(md.categories.fixed);
+
+    syncSectionWithDeductions(md.categories.pretaxInvestments, investmentDeductions);
+  }
+
+  function syncSectionWithDeductions(list, deductions) {
+    const dedNames = new Set(deductions.map(d => (d.name || '').trim()));
+
+    // Remove orphaned linked rows (flag set, no matching deduction in this section).
+    for (let i = list.length - 1; i >= 0; i--) {
+      const row = list[i];
+      if (row.linkedToSalary && !dedNames.has((row.name || '').trim())) {
+        list.splice(i, 1);
+      }
+    }
+
+    // Ensure every deduction has a matching row in this section; flag matches as linked.
+    for (const ded of deductions) {
+      const dedName = (ded.name || '').trim();
+      const existing = list.find(r => (r.name || '').trim() === dedName);
+      if (!existing) {
+        const nextOrder = list.reduce((m, r) => Math.max(m, r.order ?? 0), -1) + 1;
+        const newR = newRow(ded.name, parseAmount(ded.amount), nextOrder);
+        newR.linkedToSalary = true;
+        list.push(newR);
+      } else if (!existing.linkedToSalary) {
+        existing.linkedToSalary = true;
+      }
+    }
+  }
+
+  // Display order for sections that may contain linked rows: linked rows first
+  // (in deduction-list order), then unlinked rows (in their stored order).
+  function sortLinkedRows(list, monthKey, section) {
+    const requiredType = TYPE_BY_LINKED_SECTION[section];
+    const deductions = (requiredType && isSalaryActive(monthKey))
+      ? getSalaryDeductionsForMonth(monthKey)
+          .filter(d => normalizeDeductionType(d.type, d.name) === requiredType)
+      : [];
+    const dedOrder = new Map();
+    deductions.forEach((d, i) => {
+      const n = (d.name || '').trim();
+      if (n && !dedOrder.has(n)) dedOrder.set(n, i);
+    });
+
+    const linked = [];
+    const unlinked = [];
+    for (const row of list) {
+      const n = (row.name || '').trim();
+      if (dedOrder.has(n)) linked.push(row);
+      else unlinked.push(row);
+    }
+    linked.sort((a, b) =>
+      dedOrder.get((a.name || '').trim()) - dedOrder.get((b.name || '').trim())
+    );
+    unlinked.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return [...linked, ...unlinked];
   }
 
   // ============================================================
@@ -433,14 +752,27 @@ income:            'Income',
   // RENDER — MAIN ROW
   // ============================================================
   function renderRow(row, section, isFirst = false, isLast = false) {
-    const actual     = sumTransactions(row);
-    const { text: varianceText, className: varianceClass } = formatVariance(parseAmount(row.expected), actual, section);
-    const isExpanded = expandedRows.has(row.id);
+    const linkedExpected = getLinkedExpected(row, section);
+    const isLinked       = linkedExpected !== null;
+    const adjustable     = isLinkedAdjustableRow(row, section);
+    const expectedValue  = isLinked ? linkedExpected : parseAmount(row.expected);
+    const actual         = getActual(row, section);
+    const { text: varianceText, className: varianceClass } = formatVariance(expectedValue, actual, section);
+    const isExpanded     = expandedRows.has(row.id);
+
+    const linkTooltip = section === 'income'
+      ? 'Edit on the Salary page'
+      : 'Pre-tax contribution. Edit on the Salary page';
+
+    const trClassName = [
+      isExpanded ? 'row-expanded' : '',
+      isLinked   ? 'row-linked'   : '',
+    ].filter(Boolean).join(' ');
 
     const tr = el('tr', {
       'data-id':      row.id,
       'data-section': section,
-      className:      isExpanded ? 'row-expanded' : '',
+      className:      trClassName,
     });
 
     const chevron = el('button', {
@@ -458,6 +790,11 @@ income:            'Income',
       ...(isMobile ? { rows: '1' } : { type: 'text' }),
     });
     nameInput.value = row.name;
+    // Linked Pre-Tax Investments row names are read-only — sync would otherwise auto-revert any rename
+    if (isLinked && section === 'pretaxInvestments') {
+      nameInput.readOnly = true;
+      nameInput.title = linkTooltip;
+    }
     if (isMobile) {
       // Enter blurs the field instead of inserting a newline (names are single-value)
       nameInput.addEventListener('keydown', e => {
@@ -468,58 +805,105 @@ income:            'Income',
     const nameCell = el('div', { className: 'name-cell' });
     nameCell.appendChild(chevron);
     nameCell.appendChild(nameInput);
+    if (isLinked) {
+      const badge = el('span', {
+        className: 'linked-badge',
+        title:     linkTooltip,
+        textContent: 'from Salary',
+      });
+      nameCell.appendChild(badge);
+    }
+    // Sub-type chooser for non-linked Savings & Investments rows.
+    if (section === 'savings' && !isLinked) {
+      const subtypeSelect = el('select', {
+        className:    'row-subtype',
+        'data-field': 'subtype',
+        'aria-label': `Sub-type for ${row.name || 'this row'}`,
+        title:        'Investment = market-exposed; Savings = liquid cash',
+      });
+      subtypeSelect.append(
+        el('option', { value: 'investment', textContent: 'Investment' }),
+        el('option', { value: 'savings',    textContent: 'Savings'    }),
+      );
+      subtypeSelect.value = getRowSubtype(row, section);
+      nameCell.appendChild(subtypeSelect);
+    }
 
-    const rawExpected = parseAmount(row.expected);
-    const expectedInput = el('input', {
-      type:         'text',
-      inputmode:    'decimal',
-      value:         formatCurrency(rawExpected),
-      'aria-label': `Expected for ${row.name}`,
-      'data-field': 'expected',
-    });
-    expectedInput.addEventListener('focus', () => {
-      const raw = parseAmount(expectedInput.value);
-      expectedInput.value = raw === 0 ? '' : String(raw);
-    });
-    expectedInput.addEventListener('blur', () => {
-      const raw = parseAmount(expectedInput.value);
-      expectedInput.value = formatCurrency(raw);
-    });
-    expectedInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
-    });
+    let expectedCell;
+    if (isLinked) {
+      expectedCell = el('div', {
+        className:    'expected-readonly',
+        title:        linkTooltip,
+        'aria-label': `Expected for ${row.name} (read-only — edit on Salary page)`,
+        textContent:  formatCurrency(expectedValue),
+      });
+    } else {
+      const expectedInput = el('input', {
+        type:         'text',
+        inputmode:    'decimal',
+        value:         formatCurrency(expectedValue),
+        'aria-label': `Expected for ${row.name}`,
+        'data-field': 'expected',
+      });
+      expectedInput.addEventListener('focus', () => {
+        const raw = parseAmount(expectedInput.value);
+        expectedInput.value = raw === 0 ? '' : String(raw);
+      });
+      expectedInput.addEventListener('blur', () => {
+        const raw = parseAmount(expectedInput.value);
+        expectedInput.value = formatCurrency(raw);
+      });
+      expectedInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+      });
+      expectedCell = expectedInput;
+    }
 
-    const upBtn = el('button', {
-      className:     'btn-reorder',
-      'aria-label':  'Move row up',
-      'data-action': 'move-up',
-      textContent:   '▲',
-    });
-    if (isFirst) upBtn.disabled = true;
-
-    const downBtn = el('button', {
-      className:     'btn-reorder',
-      'aria-label':  'Move row down',
-      'data-action': 'move-down',
-      textContent:   '▼',
-    });
-    if (isLast) downBtn.disabled = true;
-
-    const removeBtn = el('button', {
-      className:     'btn-remove',
-      'aria-label':  T('removeAriaLabel'),
-      'data-action': 'remove',
-      textContent:   T('remove'),
-    });
-
+    // Action buttons — hidden for Pre-Tax Investments rows (must be edited via Salary page).
     const actionsWrapper = el('div', { className: 'row-actions' });
-    actionsWrapper.appendChild(upBtn);
-    actionsWrapper.appendChild(downBtn);
-    actionsWrapper.appendChild(removeBtn);
+    if (!(isLinked && section === 'pretaxInvestments')) {
+      const upBtn = el('button', {
+        className:     'btn-reorder',
+        'aria-label':  'Move row up',
+        'data-action': 'move-up',
+        textContent:   '▲',
+      });
+      if (isFirst) upBtn.disabled = true;
+
+      const downBtn = el('button', {
+        className:     'btn-reorder',
+        'aria-label':  'Move row down',
+        'data-action': 'move-down',
+        textContent:   '▼',
+      });
+      if (isLast) downBtn.disabled = true;
+
+      const removeBtn = el('button', {
+        className:     'btn-remove',
+        'aria-label':  T('removeAriaLabel'),
+        'data-action': 'remove',
+        textContent:   T('remove'),
+      });
+
+      actionsWrapper.appendChild(upBtn);
+      actionsWrapper.appendChild(downBtn);
+      actionsWrapper.appendChild(removeBtn);
+    }
+
+    // Linked savings/fixed rows: Actual is auto-computed (Expected + adjustments) and read-only.
+    let actualCell;
+    if (adjustable) {
+      actualCell = el('div', {
+        className:    'expected-readonly',
+        title:        'Auto-computed: Expected + adjustments. Use + Add adjustment to alter.',
+        'aria-label': `Actual for ${row.name} (read-only — adjusts via this row's expansion panel)`,
+        textContent:  formatCurrency(actual),
+      });
+    }
 
     tr.appendChild(el('td', {}, nameCell));
-    tr.appendChild(el('td', {}, expectedInput));
-    tr.appendChild(el('td', { textContent: formatCurrency(actual) }));
+    tr.appendChild(el('td', {}, expectedCell));
+    tr.appendChild(adjustable ? el('td', {}, actualCell) : el('td', { textContent: formatCurrency(actual) }));
     tr.appendChild(el('td', { className: varianceClass, textContent: varianceText }));
     tr.appendChild(el('td', {}, actionsWrapper));
     return tr;
@@ -595,29 +979,155 @@ income:            'Income',
   }
 
   // ============================================================
+  // RENDER — ADJUSTMENTS PANEL (linked savings/fixed rows)
+  // ============================================================
+  function renderAdjustmentItem(adj, rowId, section) {
+    const amount = parseAmount(adj.amount);
+    const div = el('div', {
+      className:      'adjustment-item',
+      'data-adj-id':  adj.id,
+      'data-row-id':  rowId,
+      'data-section': section,
+    });
+    const sign = amount > 0 ? '+' : (amount < 0 ? '-' : '');
+    const display = sign + formatCurrency(Math.abs(amount));
+    const amountClass = amount > 0
+      ? 'adj-amount adj-amount--pos'
+      : amount < 0
+        ? 'adj-amount adj-amount--neg'
+        : 'adj-amount';
+    div.appendChild(el('span', { className: amountClass, textContent: display }));
+    div.appendChild(el('span', { className: 'adj-note', textContent: adj.note || '' }));
+    div.appendChild(el('button', {
+      className:     'btn-remove',
+      'aria-label':  'Remove adjustment',
+      'data-action': 'remove-adjustment',
+      textContent:   '×',
+    }));
+    return div;
+  }
+
+  function renderAdjustmentsPanel(row, section) {
+    const panelTr = el('tr', {
+      className:        'transaction-panel adjustment-panel',
+      'data-panel-for': row.id,
+      'data-section':   section,
+    });
+
+    const td = document.createElement('td');
+    td.setAttribute('colspan', '5');
+
+    const inner = el('div', { className: 'transaction-panel-inner' });
+
+    const list = el('div', { className: 'adjustment-list', id: `adj-list-${row.id}` });
+    const adjustments = row.adjustments || [];
+    if (adjustments.length === 0) {
+      list.appendChild(el('p', { className: 'adj-empty', textContent: 'No adjustments yet.' }));
+    } else {
+      for (const adj of adjustments) {
+        list.appendChild(renderAdjustmentItem(adj, row.id, section));
+      }
+    }
+    inner.appendChild(list);
+
+    // Toggle button — clicking expands the inline form below.
+    const toggleBtn = el('button', {
+      className:     'btn-add-adj-toggle',
+      'data-action': 'toggle-adjustment-form',
+      textContent:   '+ Add adjustment',
+    });
+    inner.appendChild(toggleBtn);
+
+    // Form, hidden by default; revealed via toggle button.
+    const form = el('div', {
+      className:      'adjustment-add-form hidden',
+      'data-row-id':  row.id,
+      'data-section': section,
+    });
+    const amountInput = el('input', {
+      type:        'number',
+      className:   'adj-input-amount',
+      placeholder: 'Amount (positive or negative)',
+      step:        '0.01',
+    });
+    const noteInput = el('input', {
+      type:        'text',
+      className:   'adj-input-note',
+      placeholder: 'Note (optional)',
+    });
+    const cancelBtn = el('button', {
+      className:     'btn-cancel-adj',
+      'data-action': 'cancel-adjustment-form',
+      textContent:   'Cancel',
+    });
+    const submitBtn = el('button', {
+      className:     'btn-add-adj',
+      'data-action': 'add-adjustment',
+      textContent:   'Add',
+    });
+    [amountInput, noteInput].forEach(input => {
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') submitBtn.click(); });
+    });
+    form.append(amountInput, noteInput, cancelBtn, submitBtn);
+    inner.appendChild(form);
+
+    td.appendChild(inner);
+    panelTr.appendChild(td);
+    return panelTr;
+  }
+
+  function renderRowExpansionPanel(row, section) {
+    if (isLinkedAdjustableRow(row, section)) {
+      return renderAdjustmentsPanel(row, section);
+    }
+    return renderTransactionPanel(row, section);
+  }
+
+  // ============================================================
   // RENDER — TABLES & SUMMARY
   // ============================================================
   function renderTable(tbodyId, rows, section) {
     const tbody = document.getElementById(tbodyId);
     if (!tbody) return;
     tbody.innerHTML = '';
-    const sorted = [...rows].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    let sorted;
+    let firstReorderableIdx = -1;
+    let lastReorderableIdx  = -1;
+    if (section === 'pretaxInvestments') {
+      // All rows are linked; preserve deduction order, no reorder controls.
+      sorted = sortLinkedRows(rows, currentMonth, section);
+    } else {
+      sorted = [...rows].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      if (sorted.length > 0) {
+        firstReorderableIdx = 0;
+        lastReorderableIdx  = sorted.length - 1;
+      }
+    }
+
     for (let i = 0; i < sorted.length; i++) {
       const row = sorted[i];
-      tbody.appendChild(renderRow(row, section, i === 0, i === sorted.length - 1));
+      const isFirst = i === firstReorderableIdx;
+      const isLast  = i === lastReorderableIdx;
+      tbody.appendChild(renderRow(row, section, isFirst, isLast));
       if (expandedRows.has(row.id)) {
-        tbody.appendChild(renderTransactionPanel(row, section));
+        tbody.appendChild(renderRowExpansionPanel(row, section));
       }
     }
   }
 
   function renderAllTables() {
     const md = state.months[currentMonth];
-    renderTable('income-body',       md.income,                  'income');
-    renderTable('fixed-body',        md.categories.fixed,        'fixed');
-    renderTable('variable-body',     md.categories.variable,     'variable');
-    renderTable('recreational-body', md.categories.recreational,    'recreational');
-    renderTable('savings-body',      md.categories.savings || [],   'savings');
+    const pretaxRows = md.categories.pretaxInvestments || [];
+    renderTable('income-body',             md.income,                     'income');
+    renderTable('pretax-investments-body', pretaxRows,                    'pretaxInvestments');
+    renderTable('fixed-body',              md.categories.fixed,           'fixed');
+    renderTable('variable-body',           md.categories.variable,        'variable');
+    renderTable('recreational-body',       md.categories.recreational,    'recreational');
+    renderTable('savings-body',            md.categories.savings || [],   'savings');
+
+    const pretaxSection = document.getElementById('pretax-investments-section');
+    if (pretaxSection) pretaxSection.style.display = pretaxRows.length > 0 ? '' : 'none';
   }
 
   function renderSummary() {
@@ -626,6 +1136,7 @@ income:            'Income',
     const incomeEl      = document.getElementById('summary-income');
     const unallocatedEl = document.getElementById('summary-unallocated');
     const savingsEl     = document.getElementById('summary-savings');
+    const investmentsEl = document.getElementById('summary-investments');
     const netEl         = document.getElementById('summary-net');
     const insightEl     = document.getElementById('summary-insight');
 
@@ -639,7 +1150,8 @@ income:            'Income',
                                           : 'unallocated-danger';
     }
 
-    if (savingsEl) savingsEl.textContent = formatCurrency(sum.savingsExpected);
+    if (savingsEl)     savingsEl.textContent     = formatCurrency(sum.savingsActual);
+    if (investmentsEl) investmentsEl.textContent = formatCurrency(sum.investmentsActual);
 
     if (netEl) {
       netEl.textContent = formatCurrency(sum.netActual);
@@ -668,6 +1180,7 @@ income:            'Income',
   }
 
   function renderAll() {
+    syncBudgetWithSalary(currentMonth);
     renderAllTables();
     renderSummary();
     renderSalary();
@@ -684,12 +1197,16 @@ income:            'Income',
     const tr = document.querySelector(`tr[data-id="${rowId}"]`);
     if (!tr) return;
 
-    const actual = sumTransactions(row);
-    const { text: varianceText, className: varianceClass } = formatVariance(parseAmount(row.expected), actual, section);
+    const actual = getActual(row, section);
+    const { text: varianceText, className: varianceClass } = formatVariance(getEffectiveExpected(row, section), actual, section);
 
     const actualTd   = tr.children[2];
     const varianceTd = tr.children[3];
-    if (actualTd)   actualTd.textContent   = formatCurrency(actual);
+    if (actualTd) {
+      const readonlyDiv = actualTd.querySelector('.expected-readonly');
+      if (readonlyDiv) readonlyDiv.textContent = formatCurrency(actual);
+      else actualTd.textContent = formatCurrency(actual);
+    }
     if (varianceTd) {
       varianceTd.textContent = varianceText;
       varianceTd.className   = varianceClass;
@@ -713,10 +1230,12 @@ income:            'Income',
       expandedRows.add(rowId);
       const row = findRow(section, rowId);
       if (!row) return;
-      const panelTr = renderTransactionPanel(row, section);
+      const panelTr = renderRowExpansionPanel(row, section);
       mainTr.insertAdjacentElement('afterend', panelTr);
       mainTr.classList.add('row-expanded');
       if (chevron) { chevron.textContent = '▾'; chevron.setAttribute('aria-expanded', 'true'); }
+      // For non-linked rows, focus the transaction amount input. Adjustment rows
+      // require a click on "+ Add adjustment" first, so no auto-focus there.
       panelTr.querySelector('.txn-input-amount')?.focus();
     }
   }
@@ -824,6 +1343,56 @@ income:            'Income',
     debouncedSave();
   }
 
+  function addAdjustment(rowId, section, form) {
+    const amountInput = form.querySelector('.adj-input-amount');
+    const noteInput   = form.querySelector('.adj-input-note');
+
+    const amount = parseAmount(amountInput.value);
+    if (amount === 0) return;
+
+    const row = findRow(section, rowId);
+    if (!row) return;
+    pushUndo(`adjustment to ${row.name}`);
+
+    if (!Array.isArray(row.adjustments)) row.adjustments = [];
+    const adj = newAdjustment(amount, noteInput.value.trim());
+    row.adjustments.push(adj);
+
+    const list = document.getElementById(`adj-list-${rowId}`);
+    if (list) {
+      list.querySelector('.adj-empty')?.remove();
+      list.appendChild(renderAdjustmentItem(adj, rowId, section));
+    }
+
+    amountInput.value = '';
+    noteInput.value   = '';
+    form.classList.add('hidden');
+
+    updateRowCells(rowId, section);
+    renderSummary();
+    debouncedSave();
+  }
+
+  function removeAdjustment(rowId, section, adjId, itemEl) {
+    const row = findRow(section, rowId);
+    if (!row) return;
+    const adjustments = row.adjustments || [];
+    const idx = adjustments.findIndex(a => a.id === adjId);
+    if (idx === -1) return;
+    pushUndo(`remove adjustment from ${row.name}`);
+    adjustments.splice(idx, 1);
+    itemEl.remove();
+
+    const list = document.getElementById(`adj-list-${rowId}`);
+    if (list && adjustments.length === 0) {
+      list.appendChild(el('p', { className: 'adj-empty', textContent: 'No adjustments yet.' }));
+    }
+
+    updateRowCells(rowId, section);
+    renderSummary();
+    debouncedSave();
+  }
+
   // ============================================================
   // EVENT DELEGATION
   // ============================================================
@@ -841,13 +1410,16 @@ income:            'Income',
       row.name = e.target.value;
     } else if (field === 'expected') {
       row.expected = parseAmount(e.target.value);
-      const actual  = sumTransactions(row);
-      const { text: varianceText, className: varianceClass } = formatVariance(row.expected, actual, section);
+      const actual  = getActual(row, section);
+      const { text: varianceText, className: varianceClass } = formatVariance(getEffectiveExpected(row, section), actual, section);
       const varTd = tr.children[3];
       if (varTd) {
         varTd.textContent = varianceText;
         varTd.className   = varianceClass;
       }
+      renderSummary();
+    } else if (field === 'subtype') {
+      row.subtype = normalizeSubtype(e.target.value, row.name);
       renderSummary();
     }
 
@@ -912,6 +1484,51 @@ income:            'Income',
       const form = addTxnBtn.closest('.transaction-add-form');
       if (!form) return;
       addTransaction(form.dataset.rowId, form.dataset.section, form);
+      return;
+    }
+
+    // Toggle adjustment form (linked rows)
+    const toggleAdjBtn = e.target.closest('[data-action="toggle-adjustment-form"]');
+    if (toggleAdjBtn) {
+      const inner = toggleAdjBtn.closest('.transaction-panel-inner');
+      const form  = inner?.querySelector('.adjustment-add-form');
+      if (form) {
+        form.classList.toggle('hidden');
+        if (!form.classList.contains('hidden')) {
+          form.querySelector('.adj-input-amount')?.focus();
+        }
+      }
+      return;
+    }
+
+    // Cancel adjustment form
+    const cancelAdjBtn = e.target.closest('[data-action="cancel-adjustment-form"]');
+    if (cancelAdjBtn) {
+      const form = cancelAdjBtn.closest('.adjustment-add-form');
+      if (form) {
+        form.querySelector('.adj-input-amount').value = '';
+        form.querySelector('.adj-input-note').value   = '';
+        form.classList.add('hidden');
+      }
+      return;
+    }
+
+    // Add adjustment
+    const addAdjBtn = e.target.closest('[data-action="add-adjustment"]');
+    if (addAdjBtn) {
+      const form = addAdjBtn.closest('.adjustment-add-form');
+      if (!form) return;
+      addAdjustment(form.dataset.rowId, form.dataset.section, form);
+      return;
+    }
+
+    // Remove adjustment
+    const removeAdjBtn = e.target.closest('[data-action="remove-adjustment"]');
+    if (removeAdjBtn) {
+      const item = removeAdjBtn.closest('.adjustment-item');
+      if (!item) return;
+      const { adjId, rowId, section } = item.dataset;
+      removeAdjustment(rowId, section, adjId, item);
       return;
     }
 
@@ -1160,7 +1777,11 @@ income:            'Income',
     if (!confirm(message)) return;
 
     pushUndo(`copy from ${prevName}`);
-    const copyRows = list => (list || []).map((r, i) => newRow(r.name, r.expected, r.order ?? i));
+    const copyRows = list => (list || []).map((r, i) => {
+      const nr = newRow(r.name, r.expected, r.order ?? i);
+      if (r.subtype) nr.subtype = r.subtype;
+      return nr;
+    });
     md.income                  = copyRows(prevMd.income);
     md.categories.fixed        = copyRows(prevMd.categories?.fixed);
     md.categories.variable     = copyRows(prevMd.categories?.variable);
@@ -1217,9 +1838,13 @@ income:            'Income',
             expected:     cr.expected,
             order:        cr.order ?? i,
             transactions: existing.transactions || [],
+            adjustments:  existing.adjustments  || [],
+            ...(cr.subtype ? { subtype: cr.subtype } : (existing.subtype ? { subtype: existing.subtype } : {})),
           };
         }
-        return newRow(cr.name, cr.expected, cr.order ?? i);
+        const nr = newRow(cr.name, cr.expected, cr.order ?? i);
+        if (cr.subtype) nr.subtype = cr.subtype;
+        return nr;
       });
     };
 
@@ -1274,6 +1899,48 @@ income:            'Income',
 
     renderDeductions(rec);
     renderSalaryDerived();
+    syncSalaryApplyFutureBtnLabel();
+  }
+
+  function getFutureSalaryMonthKeys() {
+    return Object.keys(state.salaryData || {})
+      .filter(k => k > currentMonth)
+      .sort();
+  }
+
+  function syncSalaryApplyFutureBtnLabel() {
+    const btn = document.getElementById('salary-apply-future-btn');
+    if (!btn) return;
+    const [y, m]   = currentMonth.split('-').map(Number);
+    const currName = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    btn.textContent = `Apply ${currName} to all future months`;
+  }
+
+  function applySalaryToFutureMonths() {
+    const [cy, cm] = currentMonth.split('-').map(Number);
+    const currName = new Date(cy, cm - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    const futureKeys = getFutureSalaryMonthKeys();
+    if (futureKeys.length === 0) {
+      alert('No future months have salary data yet. New months will inherit from the most recent month when you visit them.');
+      return;
+    }
+
+    const message = `Apply ${currName}'s salary setup to ${futureKeys.length} future month(s)? This will overwrite annual gross, deductions, and taxes in those months. Actuals on the Budget page will not be affected.`;
+    if (!confirm(message)) return;
+
+    flushSalaryEditSession();
+    pushUndo(`apply ${currName} to future months`);
+
+    const sourceRec = state.salaryData?.[currentMonth];
+    if (!sourceRec) return;
+
+    for (const k of futureKeys) {
+      state.salaryData[k] = cloneSalaryData(sourceRec, 'inherited');
+    }
+
+    saveState();
+    renderAll();
   }
 
   function renderDeductions(rec) {
@@ -1321,6 +1988,17 @@ income:            'Income',
       if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
     });
 
+    const typeSelect = el('select', {
+      className:              'salary-deduction-type',
+      'aria-label':           'Deduction type',
+      'data-deduction-field': 'type',
+    });
+    typeSelect.append(
+      el('option', { value: 'investment', textContent: 'Investment' }),
+      el('option', { value: 'expense',    textContent: 'Expense'    }),
+    );
+    typeSelect.value = normalizeDeductionType(deduction.type, deduction.name);
+
     const removeBtn = el('button', {
       className:    'btn-remove',
       type:         'button',
@@ -1329,10 +2007,11 @@ income:            'Income',
       textContent:  '×',
     });
 
-    row.append(nameInput, amountInput, removeBtn);
+    row.append(nameInput, amountInput, typeSelect, removeBtn);
 
     if (focusField === 'name')   setTimeout(() => nameInput.focus(),   0);
     if (focusField === 'amount') setTimeout(() => amountInput.focus(), 0);
+    if (focusField === 'type')   setTimeout(() => typeSelect.focus(),  0);
 
     return row;
   }
@@ -1444,8 +2123,9 @@ income:            'Income',
       const ded = (rec.deductions || []).find(d => d.id === dedRow.dataset.deductionId);
       if (!ded) return;
       const field = target.dataset.deductionField;
-      if (field === 'name')   ded.name = target.value;
+      if (field === 'name')   ded.name   = target.value;
       if (field === 'amount') ded.amount = parseAmount(target.value);
+      if (field === 'type')   ded.type   = normalizeDeductionType(target.value, ded.name);
       rec.salarySource = 'manual';
       beginSalaryEditSession();
       if (field === 'amount') renderSalaryDerived();
@@ -1454,6 +2134,11 @@ income:            'Income',
   }
 
   function handleSalaryClick(e) {
+    if (e.target.id === 'salary-apply-future-btn') {
+      applySalaryToFutureMonths();
+      return;
+    }
+
     if (e.target.id === 'salary-add-deduction') {
       flushSalaryEditSession();
       pushUndo('add deduction');
@@ -1548,6 +2233,9 @@ income:            'Income',
       item.classList.toggle('sidebar-item--active', isActive);
       item.setAttribute('aria-current', isActive ? 'page' : 'false');
     });
+
+    // Re-render when entering Budget so any salary-page changes are reflected.
+    if (pageName === 'budget') renderAll();
 
     history.replaceState(null, '', `#${pageName}`);
   }
