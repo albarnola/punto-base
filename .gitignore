@@ -1,1 +1,34 @@
+# macOS
 .DS_Store
+._*
+
+# VS Code
+.vscode/
+
+# Editor backups
+*~
+*.swp
+
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.key
+
+# Personal data
+*.xlsx
+*.xls
+*.csv
+*.numbers
+
+# Installers
+*.dmg
+*.pkg
+*.exe
+*Installer*
+
+# Node modules (future)
+node_modules/
+
+# Logs
+*.log
