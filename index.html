@@ -93,9 +93,38 @@
 
     <!-- Dashboard page -->
     <section id="page-dashboard" class="page-hidden">
-      <div class="page-placeholder">
-        <p>Dashboard coming soon</p>
+
+      <!-- Month Picker -->
+      <section class="month-picker-section" aria-label="Month selection">
+        <label for="month-picker-dashboard" class="sr-only">Select month</label>
+      </section>
+
+      <!-- Heading -->
+      <div class="dashboard-header">
+        <h1 class="dashboard-heading" id="dashboard-heading">At a glance</h1>
+        <p class="dashboard-subtitle" id="dashboard-subtitle"></p>
       </div>
+
+      <!-- Summary tiles -->
+      <section class="dashboard-tiles" aria-label="Monthly financial summary">
+        <div class="dashboard-tile">
+          <span class="dashboard-tile-label">Total Income</span>
+          <span class="dashboard-tile-value" id="dashboard-income">$0.00</span>
+        </div>
+        <div class="dashboard-tile">
+          <span class="dashboard-tile-label">Total Spent</span>
+          <span class="dashboard-tile-value" id="dashboard-spent">$0.00</span>
+        </div>
+        <div class="dashboard-tile">
+          <span class="dashboard-tile-label">Total Saved</span>
+          <span class="dashboard-tile-value" id="dashboard-saved">$0.00</span>
+        </div>
+        <div class="dashboard-tile">
+          <span class="dashboard-tile-label">Net Cash Left</span>
+          <span class="dashboard-tile-value" id="dashboard-net">$0.00</span>
+        </div>
+      </section>
+
     </section>
 
     <!-- Salary page -->

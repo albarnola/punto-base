@@ -1184,8 +1184,67 @@ income:            'Income',
     renderAllTables();
     renderSummary();
     renderSalary();
+    renderDashboard();
     syncCopyBtnLabel();
     syncApplyFutureBtnLabel();
+  }
+
+  // ============================================================
+  // DASHBOARD
+  // ============================================================
+  function renderDashboard() {
+    const headingEl  = document.getElementById('dashboard-heading');
+    const subtitleEl = document.getElementById('dashboard-subtitle');
+    const incomeEl   = document.getElementById('dashboard-income');
+    const spentEl    = document.getElementById('dashboard-spent');
+    const savedEl    = document.getElementById('dashboard-saved');
+    const netEl      = document.getElementById('dashboard-net');
+    if (!headingEl || !incomeEl) return;
+
+    const [y, m]    = currentMonth.split('-').map(Number);
+    const monthName = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    const md  = state.months[currentMonth];
+    const sum = computeSummary(md);
+
+    // TOTAL SAVED combines post-tax + pre-tax (the existing summary's
+    // savings + investments tiles already split this the same way).
+    const totalIncome = sum.incomeExpected;
+    const totalSpent  = sum.expensesActual;
+    const totalSaved  = sum.savingsActual + sum.investmentsActual;
+
+    // NET CASH LEFT subtracts only post-tax savings — pre-tax was never
+    // in the take-home pool to begin with.
+    const postTaxSavingsAct = sumListActual(md.categories.savings || []);
+    const netCash = totalIncome - totalSpent - postTaxSavingsAct;
+    const netRounded = Math.round(netCash * 100) / 100;
+
+    headingEl.textContent = `${monthName} at a glance`;
+    incomeEl.textContent  = formatCurrency(totalIncome);
+    spentEl.textContent   = formatCurrency(totalSpent);
+    savedEl.textContent   = formatCurrency(totalSaved);
+    netEl.textContent     = formatCurrency(netRounded);
+    netEl.className = 'dashboard-tile-value ' +
+      (netRounded > 0 ? 'positive' : netRounded < 0 ? 'negative' : 'neutral');
+
+    if (subtitleEl) {
+      const unallocatedRounded = Math.round(sum.unallocated * 100) / 100;
+      const savingsRate = totalIncome > 0 ? totalSaved / totalIncome : 0;
+      let subtitle;
+      if (totalIncome === 0) {
+        subtitle = 'Add your income on the Salary page to start budgeting';
+      } else if (netRounded < 0) {
+        subtitle = `You spent ${formatCurrency(Math.abs(netRounded))} more than you earned this month`;
+      } else if (savingsRate >= 0.20) {
+        const pct = Math.round(savingsRate * 100);
+        subtitle = `Strong savings month — you saved ${pct}% of your income`;
+      } else if (unallocatedRounded === 0) {
+        subtitle = 'Every dollar has a job ✓';
+      } else {
+        subtitle = `Your financial summary for ${monthName}`;
+      }
+      subtitleEl.textContent = subtitle;
+    }
   }
 
   // ============================================================
@@ -2234,8 +2293,9 @@ income:            'Income',
       item.setAttribute('aria-current', isActive ? 'page' : 'false');
     });
 
-    // Re-render when entering Budget so any salary-page changes are reflected.
-    if (pageName === 'budget') renderAll();
+    // Re-render when entering Budget or Dashboard so any salary/budget edits
+    // made on another page are reflected.
+    if (pageName === 'budget' || pageName === 'dashboard') renderAll();
 
     history.replaceState(null, '', `#${pageName}`);
   }
