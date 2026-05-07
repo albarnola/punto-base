@@ -1,0 +1,161 @@
+(function () {
+  'use strict';
+
+  async function getClient() {
+    if (window.supabaseClient) return window.supabaseClient;
+    if (window.supabaseReady) return await window.supabaseReady;
+    throw new Error('Supabase client not initialized');
+  }
+
+  async function getUserId() {
+    if (window.puntoAuth && typeof window.puntoAuth.getCurrentUser === 'function') {
+      const user = await window.puntoAuth.getCurrentUser();
+      return user ? user.id : null;
+    }
+    const client = await getClient();
+    const { data } = await client.auth.getUser();
+    return data && data.user ? data.user.id : null;
+  }
+
+  function friendlyError(err) {
+    if (!err) return 'Something went wrong. Please try again.';
+    const raw = err.message || String(err);
+    const msg = raw.toLowerCase();
+    const code = (err.code || '').toString().toUpperCase();
+
+    if (code === 'PGRST301' || msg.includes('jwt expired') || msg.includes('jwt')) {
+      return 'Your session has expired. Please sign in again.';
+    }
+    if (code === '42501' || msg.includes('permission denied') || msg.includes('row-level security') || msg.includes('rls')) {
+      return 'You do not have permission to access this data.';
+    }
+    if (msg.includes('network') || msg.includes('failed to fetch') || msg.includes('load failed')) {
+      return 'Network error. Check your connection and try again.';
+    }
+    if (msg.includes('rate limit') || msg.includes('too many')) {
+      return 'Too many requests. Please wait a moment and try again.';
+    }
+    return raw || 'Something went wrong. Please try again.';
+  }
+
+  function notSignedIn() {
+    return { success: false, error: 'You are not signed in. Please sign in and try again.' };
+  }
+
+  async function getCategories() {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('budget_categories')
+        .select('id, name, section, subtype, sort_order, is_linked, linked_deduction_id, created_at')
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .order('section', { ascending: true })
+        .order('sort_order', { ascending: true });
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || [] };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function getMonthlyEntries(month) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('monthly_entries')
+        .select('id, category_id, month, expected, actual')
+        .eq('user_id', userId)
+        .eq('month', month);
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || [] };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function getSalaryRecord(month) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('salary_records')
+        .select('id, month, annual_gross, monthly_taxes, salary_source')
+        .eq('user_id', userId)
+        .eq('month', month)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || null };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function getSalaryDeductions(salaryRecordId) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('salary_deductions')
+        .select('id, name, amount, deduction_type, sort_order')
+        .eq('salary_record_id', salaryRecordId)
+        .is('deleted_at', null)
+        .order('sort_order', { ascending: true });
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || [] };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function getAdjustments(month) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('adjustments')
+        .select('id, category_id, month, amount, note')
+        .eq('user_id', userId)
+        .eq('month', month)
+        .is('deleted_at', null);
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || [] };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function getUserPreferences() {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('user_preferences')
+        .select('currency, sidebar_collapsed, onboarding_complete')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || null };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  window.puntoApi = {
+    getCategories,
+    getMonthlyEntries,
+    getSalaryRecord,
+    getSalaryDeductions,
+    getAdjustments,
+    getUserPreferences,
+  };
+})();
