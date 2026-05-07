@@ -2272,6 +2272,38 @@ income:            'Income',
     set('txndate-select',   state.settings.defaultTransactionDate ?? 'today');
   }
 
+  function renderAccountSection(user) {
+    const settingsPage = document.querySelector('#page-settings .settings-page');
+    if (!settingsPage) return;
+    if (document.getElementById('account-section')) return;
+
+    const section = document.createElement('section');
+    section.id = 'account-section';
+    section.className = 'settings-section';
+    section.setAttribute('aria-labelledby', 'settings-account-heading');
+
+    const heading = document.createElement('h3');
+    heading.id = 'settings-account-heading';
+    heading.textContent = 'Account';
+
+    const emailEl = document.createElement('p');
+    emailEl.style.cssText = 'font-family:var(--font-mono);font-size:var(--text-sm);color:var(--color-text-muted);margin:0;word-break:break-all;';
+    emailEl.textContent = user?.email || '';
+
+    const signOutBtn = document.createElement('button');
+    signOutBtn.type = 'button';
+    signOutBtn.id = 'sign-out-btn';
+    signOutBtn.className = 'btn-secondary';
+    signOutBtn.style.alignSelf = 'flex-start';
+    signOutBtn.textContent = 'Sign Out';
+    signOutBtn.addEventListener('click', () => {
+      if (window.puntoAuth) window.puntoAuth.signOut();
+    });
+
+    section.append(heading, emailEl, signOutBtn);
+    settingsPage.appendChild(section);
+  }
+
   // ============================================================
   // NAVIGATION
   // ============================================================
@@ -2489,10 +2521,21 @@ income:            'Income',
     else MOBILE_MQL.addListener(onBreakpointChange); // older Safari
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
+  async function bootstrap() {
+    if (!window.puntoAuth) {
+      console.error('Punto Base auth scripts did not load. Aborting.');
+      return;
+    }
+    const user = await window.puntoAuth.requireAuth();
+    if (!user) return; // requireAuth() redirected to login.html
     init();
+    renderAccountSection(user);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootstrap);
+  } else {
+    bootstrap();
   }
 
 })();
