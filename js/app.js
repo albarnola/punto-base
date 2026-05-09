@@ -78,6 +78,10 @@ income:            'Income',
   let saveTimer    = null;
   const expandedRows = new Set();
 
+  // Cache of Supabase categories from init's fetch, reused on month change
+  // to re-stamp row IDs.
+  let apiCategoriesCache = null;
+
   // Undo / redo
   const undoStack   = [];
   const redoStack   = [];
@@ -350,8 +354,8 @@ income:            'Income',
     return result.data || [];
   }
 
-  function applyApiCategoriesToCurrentMonth(rows) {
-    const md = state.months[currentMonth];
+  function applyApiCategoriesToMonth(rows, monthKey = currentMonth) {
+    const md = state.months[monthKey];
     md.income = [];
     md.categories = {
       fixed:             [],
@@ -1750,6 +1754,7 @@ income:            'Income',
     ensureMonth(currentMonth);
     ensureSalaryMonth(currentMonth);
     saveState();
+    if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
     const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     buildMonthPicker();
@@ -1808,6 +1813,7 @@ income:            'Income',
         ensureMonth(currentMonth);
         ensureSalaryMonth(currentMonth);
         saveState();
+        if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
         const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
         applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
         closeMonthDropdown();
@@ -2612,8 +2618,8 @@ income:            'Income',
   // ============================================================
   async function init() {
     initState();
-    const apiCategories = await loadCategoriesFromApi();
-    applyApiCategoriesToCurrentMonth(apiCategories);
+    apiCategoriesCache = await loadCategoriesFromApi();
+    applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
     const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     syncSettingsUI();
