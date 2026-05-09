@@ -501,6 +501,22 @@ income:            'Income',
     }
   }
 
+  function showLoadingOverlay() {
+    const el = document.getElementById('app-loading-overlay');
+    if (el) {
+      el.hidden = false;
+      el.setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function hideLoadingOverlay() {
+    const el = document.getElementById('app-loading-overlay');
+    if (el) {
+      el.hidden = true;
+      el.setAttribute('aria-hidden', 'true');
+    }
+  }
+
   // ============================================================
   // FORMATTING
   // ============================================================
@@ -1841,13 +1857,17 @@ income:            'Income',
     ensureSalaryMonth(currentMonth);
     saveState();
     if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
-    const apiSalary = await loadSalaryFromApi(currentMonth);
+    showLoadingOverlay();
+    const [apiSalary, apiAdjustments, apiEntries] = await Promise.all([
+      loadSalaryFromApi(currentMonth),
+      loadAdjustmentsFromApi(currentMonth),
+      loadMonthlyEntriesFromApi(currentMonth),
+    ]);
     applyApiSalaryToMonth(apiSalary, currentMonth);
-    const apiAdjustments = await loadAdjustmentsFromApi(currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
-    const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     buildMonthPicker();
+    hideLoadingOverlay();
     renderAll();
     closeMonthDropdown();
   }
@@ -1904,14 +1924,18 @@ income:            'Income',
         ensureSalaryMonth(currentMonth);
         saveState();
         if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
-        const apiSalary = await loadSalaryFromApi(currentMonth);
+        showLoadingOverlay();
+        const [apiSalary, apiAdjustments, apiEntries] = await Promise.all([
+          loadSalaryFromApi(currentMonth),
+          loadAdjustmentsFromApi(currentMonth),
+          loadMonthlyEntriesFromApi(currentMonth),
+        ]);
         applyApiSalaryToMonth(apiSalary, currentMonth);
-        const apiAdjustments = await loadAdjustmentsFromApi(currentMonth);
         applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
-        const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
         applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
         closeMonthDropdown();
         buildMonthPicker();
+        hideLoadingOverlay();
         renderAll();
       });
       grid.appendChild(btn);
@@ -2711,18 +2735,23 @@ income:            'Income',
   // INIT
   // ============================================================
   async function init() {
+    showLoadingOverlay();
     initState();
-    apiCategoriesCache = await loadCategoriesFromApi();
+    const [apiCats, apiSalary, apiAdjustments, apiEntries] = await Promise.all([
+      loadCategoriesFromApi(),
+      loadSalaryFromApi(currentMonth),
+      loadAdjustmentsFromApi(currentMonth),
+      loadMonthlyEntriesFromApi(currentMonth),
+    ]);
+    apiCategoriesCache = apiCats;
     applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
-    const apiSalary = await loadSalaryFromApi(currentMonth);
     applyApiSalaryToMonth(apiSalary, currentMonth);
-    const apiAdjustments = await loadAdjustmentsFromApi(currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
-    const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     syncSettingsUI();
     buildMonthPicker();
     bindSalaryInputFormatting();
+    hideLoadingOverlay();
     renderAll();
     bindEvents();
     initNav();
