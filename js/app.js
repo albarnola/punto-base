@@ -464,6 +464,43 @@ income:            'Income',
     };
   }
 
+  async function loadAdjustmentsFromApi(monthKey) {
+    if (!window.puntoApi || typeof window.puntoApi.getAdjustments !== 'function') {
+      console.warn('puntoApi.getAdjustments is not available');
+      return [];
+    }
+    const result = await window.puntoApi.getAdjustments(monthKey);
+    if (!result || !result.success) {
+      console.warn('Failed to load adjustments from Supabase:', result && result.error);
+      return [];
+    }
+    return result.data || [];
+  }
+
+  // Replace each row's adjustments[] with the API's adjustments for that
+  // category, routed via entry.category_id ↔ row.id. Drops category_id and
+  // month from the stored shape — the row owns the linkage by containment,
+  // and the per-month state already scopes by month. Idempotent: every row
+  // gets a fresh array (or [] if there are no matching adjustments).
+  function applyApiAdjustmentsToMonth(adjustments, monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const byCategoryId = new Map();
+    for (const a of adjustments || []) {
+      const slim = { id: a.id, amount: parseAmount(a.amount), note: a.note };
+      const list = byCategoryId.get(a.category_id);
+      if (list) list.push(slim);
+      else byCategoryId.set(a.category_id, [slim]);
+    }
+    const allRows = [
+      ...(md.income || []),
+      ...Object.values(md.categories || {}).flatMap(l => l || []),
+    ];
+    for (const row of allRows) {
+      row.adjustments = byCategoryId.get(row.id) || [];
+    }
+  }
+
   // ============================================================
   // FORMATTING
   // ============================================================
@@ -1806,6 +1843,8 @@ income:            'Income',
     if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
     const apiSalary = await loadSalaryFromApi(currentMonth);
     applyApiSalaryToMonth(apiSalary, currentMonth);
+    const apiAdjustments = await loadAdjustmentsFromApi(currentMonth);
+    applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     buildMonthPicker();
@@ -1867,6 +1906,8 @@ income:            'Income',
         if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
         const apiSalary = await loadSalaryFromApi(currentMonth);
         applyApiSalaryToMonth(apiSalary, currentMonth);
+        const apiAdjustments = await loadAdjustmentsFromApi(currentMonth);
+        applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
         const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
         applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
         closeMonthDropdown();
@@ -2675,6 +2716,8 @@ income:            'Income',
     applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
     const apiSalary = await loadSalaryFromApi(currentMonth);
     applyApiSalaryToMonth(apiSalary, currentMonth);
+    const apiAdjustments = await loadAdjustmentsFromApi(currentMonth);
+    applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     syncSettingsUI();
