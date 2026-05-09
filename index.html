@@ -141,7 +141,7 @@
 
       <!-- Apply to future months -->
       <section class="salary-apply-future" aria-label="Apply this month forward">
-        <button class="btn-secondary" id="salary-apply-future-btn" type="button"></button>
+        <button class="btn-secondary btn--inactive" id="salary-apply-future-btn" type="button" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon."></button>
         <p class="salary-apply-note">Overwrites future months even if they've been manually edited.</p>
       </section>
 
@@ -446,11 +446,11 @@
 
         <section class="settings-section" aria-labelledby="settings-data-heading">
           <h3 id="settings-data-heading">Data</h3>
-          <button class="btn-secondary" id="copy-prev-month-btn"></button>
-          <button class="btn-secondary" id="apply-future-btn"></button>
-          <button class="btn-secondary" id="export-btn">Export JSON</button>
-          <button class="btn-secondary" id="reset-month-btn">Reset This Month</button>
-          <button class="btn-danger" id="clear-data-btn">Clear All Data</button>
+          <button class="btn-secondary btn--inactive" id="copy-prev-month-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon."></button>
+          <button class="btn-secondary btn--inactive" id="apply-future-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon."></button>
+          <button class="btn-secondary btn--inactive" id="export-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon.">Export JSON</button>
+          <button class="btn-secondary btn--inactive" id="reset-month-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon.">Reset This Month</button>
+          <button class="btn-danger btn--inactive" id="clear-data-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon.">Clear All Data</button>
         </section>
 
       </div>
