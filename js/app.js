@@ -415,6 +415,55 @@ income:            'Income',
     }
   }
 
+  // Two sequential API calls: salary_records (one row per user per month, may
+  // be null for new users) and — only when a record exists — its deductions.
+  // Returns { record, deductions } in raw snake_case shape; the applier maps
+  // field names (monthly_taxes → taxes, deduction_type → type).
+  async function loadSalaryFromApi(monthKey) {
+    if (!window.puntoApi || typeof window.puntoApi.getSalaryRecord !== 'function') {
+      console.warn('puntoApi.getSalaryRecord is not available');
+      return { record: null, deductions: [] };
+    }
+    const recResult = await window.puntoApi.getSalaryRecord(monthKey);
+    if (!recResult || !recResult.success) {
+      console.warn('Failed to load salary record from Supabase:', recResult && recResult.error);
+      return { record: null, deductions: [] };
+    }
+    const record = recResult.data;
+    if (!record) return { record: null, deductions: [] };
+    if (typeof window.puntoApi.getSalaryDeductions !== 'function') {
+      console.warn('puntoApi.getSalaryDeductions is not available');
+      return { record, deductions: [] };
+    }
+    const dedResult = await window.puntoApi.getSalaryDeductions(record.id);
+    if (!dedResult || !dedResult.success) {
+      console.warn('Failed to load salary deductions from Supabase:', dedResult && dedResult.error);
+      return { record, deductions: [] };
+    }
+    return { record, deductions: dedResult.data || [] };
+  }
+
+  // Replace state.salaryData[monthKey] with a freshly-built record from the
+  // API. When record is null, leave the existing (defaultSalaryData) skeleton
+  // alone so the renderer keeps working for new users.
+  function applyApiSalaryToMonth({ record, deductions }, monthKey) {
+    if (!record) return;
+    if (!state.salaryData) state.salaryData = {};
+    state.salaryData[monthKey] = {
+      id:           record.id,
+      annualGross:  parseAmount(record.annual_gross),
+      taxes:        parseAmount(record.monthly_taxes),
+      salarySource: record.salary_source,
+      deductions: (deductions || []).map(d => ({
+        id:             d.id,
+        salaryRecordId: record.id,
+        name:           d.name,
+        amount:         parseAmount(d.amount),
+        type:           d.deduction_type,
+      })),
+    };
+  }
+
   // ============================================================
   // FORMATTING
   // ============================================================
@@ -1755,6 +1804,8 @@ income:            'Income',
     ensureSalaryMonth(currentMonth);
     saveState();
     if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
+    const apiSalary = await loadSalaryFromApi(currentMonth);
+    applyApiSalaryToMonth(apiSalary, currentMonth);
     const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     buildMonthPicker();
@@ -1814,6 +1865,8 @@ income:            'Income',
         ensureSalaryMonth(currentMonth);
         saveState();
         if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
+        const apiSalary = await loadSalaryFromApi(currentMonth);
+        applyApiSalaryToMonth(apiSalary, currentMonth);
         const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
         applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
         closeMonthDropdown();
@@ -2620,6 +2673,8 @@ income:            'Income',
     initState();
     apiCategoriesCache = await loadCategoriesFromApi();
     applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
+    const apiSalary = await loadSalaryFromApi(currentMonth);
+    applyApiSalaryToMonth(apiSalary, currentMonth);
     const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     syncSettingsUI();
