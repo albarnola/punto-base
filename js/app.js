@@ -325,6 +325,92 @@ income:            'Income',
       : defaultSalaryData();
   }
 
+  // Map DB section names → in-memory category keys. The DB uses snake_case
+  // and treats `income` as just another section; the local model puts income
+  // at the top level and camelCases `pretax_investments`.
+  const API_SECTION_MAP = {
+    income:             'income',
+    fixed:              'fixed',
+    variable:           'variable',
+    recreational:       'recreational',
+    savings:            'savings',
+    pretax_investments: 'pretaxInvestments',
+  };
+
+  async function loadCategoriesFromApi() {
+    if (!window.puntoApi || typeof window.puntoApi.getCategories !== 'function') {
+      console.error('puntoApi.getCategories is not available');
+      return [];
+    }
+    const result = await window.puntoApi.getCategories();
+    if (!result || !result.success) {
+      console.error('Failed to load categories from Supabase:', result && result.error);
+      return [];
+    }
+    return result.data || [];
+  }
+
+  function applyApiCategoriesToCurrentMonth(rows) {
+    const md = state.months[currentMonth];
+    md.income = [];
+    md.categories = {
+      fixed:             [],
+      variable:          [],
+      recreational:      [],
+      savings:           [],
+      pretaxInvestments: [],
+    };
+    const sorted = (rows || []).slice().sort((a, b) =>
+      (a.sort_order ?? 0) - (b.sort_order ?? 0)
+    );
+    for (const cat of sorted) {
+      const localSection = API_SECTION_MAP[cat.section];
+      if (!localSection) continue;
+      const row = newRow(cat.name || '', 0, cat.sort_order ?? 0);
+      row.id = cat.id;
+      if (localSection === 'savings') {
+        row.subtype = SUBTYPES.includes(cat.subtype)
+          ? cat.subtype
+          : inferSubtype(cat.name);
+      }
+      if (localSection === 'income') md.income.push(row);
+      else md.categories[localSection].push(row);
+    }
+  }
+
+  async function loadMonthlyEntriesFromApi(monthKey) {
+    if (!window.puntoApi || typeof window.puntoApi.getMonthlyEntries !== 'function') {
+      console.warn('puntoApi.getMonthlyEntries is not available');
+      return [];
+    }
+    const result = await window.puntoApi.getMonthlyEntries(monthKey);
+    if (!result || !result.success) {
+      console.warn('Failed to load monthly entries from Supabase:', result && result.error);
+      return [];
+    }
+    return result.data || [];
+  }
+
+  // Apply monthly_entries rows from Supabase to the in-memory model for the
+  // given month. Each entry is matched to a row by entry.category_id ↔ row.id
+  // (which equals the Supabase category UUID for rows seeded from the API).
+  // Skips entries without a matching row — defensive against deleted categories.
+  function applyApiMonthlyEntriesToMonth(entries, monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const byId = new Map();
+    for (const row of md.income || []) byId.set(row.id, row);
+    for (const list of Object.values(md.categories || {})) {
+      for (const row of list || []) byId.set(row.id, row);
+    }
+    for (const entry of entries || []) {
+      const row = byId.get(entry.category_id);
+      if (!row) continue;
+      row.expected = parseAmount(entry.expected);
+      row.actual   = parseAmount(entry.actual);
+    }
+  }
+
   // ============================================================
   // FORMATTING
   // ============================================================
@@ -371,10 +457,14 @@ income:            'Income',
   }
 
   // Linked savings/fixed rows: Actual = linked Expected (from Salary) + sum of adjustments.
-  // All other rows (including the linked income row): Actual = sum of transactions.
+  // All other rows (including the linked income row): prefer row.actual when set
+  // by the API; otherwise fall back to summing the row's transactions.
   function getActual(row, section, monthKey = currentMonth) {
     if (isLinkedAdjustableRow(row, section, monthKey)) {
       return getLinkedExpected(row, section, monthKey) + sumAdjustments(row);
+    }
+    if (typeof row.actual === 'number' && !isNaN(row.actual)) {
+      return parseAmount(row.actual);
     }
     return sumTransactions(row);
   }
@@ -391,7 +481,12 @@ income:            'Income',
   }
 
   function sumListActual(list) {
-    return list.reduce((acc, r) => acc + sumTransactions(r), 0);
+    return list.reduce((acc, r) => {
+      if (typeof r.actual === 'number' && !isNaN(r.actual)) {
+        return acc + parseAmount(r.actual);
+      }
+      return acc + sumTransactions(r);
+    }, 0);
   }
 
   function computeSummary(monthData, monthKey = currentMonth) {
@@ -422,8 +517,14 @@ income:            'Income',
     const savAct          = sumListActual(savRows);
 
     // SAVINGS / INVESTMENTS subtype-based actual sums (Savings & Investments).
-    const savingsBySubtype = (subtype) => savRows.reduce((acc, r) =>
-      acc + (getRowSubtype(r, 'savings', monthKey) === subtype ? sumTransactions(r) : 0), 0);
+    // Per-row, prefer row.actual when set by the API; otherwise sum transactions.
+    const savingsBySubtype = (subtype) => savRows.reduce((acc, r) => {
+      if (getRowSubtype(r, 'savings', monthKey) !== subtype) return acc;
+      if (typeof r.actual === 'number' && !isNaN(r.actual)) {
+        return acc + parseAmount(r.actual);
+      }
+      return acc + sumTransactions(r);
+    }, 0);
     const savingsActSubtype     = savingsBySubtype('savings');
     const investmentsActSubtype = savingsBySubtype('investment');
 
@@ -1641,7 +1742,7 @@ income:            'Income',
     });
   }
 
-  function navigateMonth(delta) {
+  async function navigateMonth(delta) {
     flushSalaryEditSession();
     const [y, m] = currentMonth.split('-').map(Number);
     currentMonth = toMonthKey(new Date(y, m - 1 + delta, 1));
@@ -1649,6 +1750,8 @@ income:            'Income',
     ensureMonth(currentMonth);
     ensureSalaryMonth(currentMonth);
     saveState();
+    const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
+    applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     buildMonthPicker();
     renderAll();
     closeMonthDropdown();
@@ -1698,13 +1801,15 @@ income:            'Income',
         'data-month':    String(m),
         textContent:     name,
       });
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         flushSalaryEditSession();
         currentMonth = `${dropdownYear}-${String(m).padStart(2, '0')}`;
         expandedRows.clear();
         ensureMonth(currentMonth);
         ensureSalaryMonth(currentMonth);
         saveState();
+        const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
+        applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
         closeMonthDropdown();
         buildMonthPicker();
         renderAll();
@@ -2505,8 +2610,12 @@ income:            'Income',
   // ============================================================
   // INIT
   // ============================================================
-  function init() {
+  async function init() {
     initState();
+    const apiCategories = await loadCategoriesFromApi();
+    applyApiCategoriesToCurrentMonth(apiCategories);
+    const apiEntries = await loadMonthlyEntriesFromApi(currentMonth);
+    applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     syncSettingsUI();
     buildMonthPicker();
     bindSalaryInputFormatting();
@@ -2528,7 +2637,7 @@ income:            'Income',
     }
     const user = await window.puntoAuth.requireAuth();
     if (!user) return; // requireAuth() redirected to login.html
-    init();
+    await init();
     renderAccountSection(user);
   }
 
