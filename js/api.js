@@ -201,6 +201,30 @@
     }
   }
 
+  async function insertMonthlyEntry(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const row = {
+        user_id:     userId,
+        category_id: payload.category_id,
+        month:       payload.month,
+        expected:    payload.expected ?? 0,
+        actual:      payload.actual   ?? 0,
+      };
+      const { data, error } = await client
+        .from('monthly_entries')
+        .insert(row)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getUserPreferences() {
     try {
       const userId = await getUserId();
@@ -227,6 +251,7 @@
     getTransactions,
     insertTransaction,
     deleteTransaction,
+    insertMonthlyEntry,
     getUserPreferences,
   };
 })();

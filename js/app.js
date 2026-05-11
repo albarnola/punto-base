@@ -431,6 +431,45 @@ income:            'Income',
     }
   }
 
+  // Ensure every in-memory row for the given month has a monthly_entry_id.
+  // Categories with no monthly_entries row for this month get one inserted
+  // and the returned id stamped back. Common case is a no-op fast path.
+  // Best-effort: per-row failures are logged but don't throw — the writer in
+  // 5C-3 can handle a still-missing id as a fallback if needed.
+  async function ensureMonthlyEntriesExist(monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const allRows = [
+      ...(md.income || []),
+      ...Object.values(md.categories || {}).flatMap(l => l || []),
+    ];
+    const missing = allRows.filter(r => r.id && !r.monthly_entry_id);
+    if (missing.length === 0) return;
+    if (!window.puntoApi || typeof window.puntoApi.insertMonthlyEntry !== 'function') {
+      console.warn('puntoApi.insertMonthlyEntry is not available; skipping ensureMonthlyEntriesExist');
+      return;
+    }
+    const results = await Promise.all(missing.map(row =>
+      window.puntoApi.insertMonthlyEntry({
+        category_id: row.id,
+        month:       monthKey,
+        expected:    parseAmount(row.expected || 0),
+        actual:      parseAmount(row.actual   || 0),
+      })
+    ));
+    for (let i = 0; i < missing.length; i++) {
+      const row    = missing[i];
+      const result = results[i];
+      if (result && result.success && result.data && result.data.id) {
+        row.monthly_entry_id = result.data.id;
+      } else {
+        console.warn(`Failed to ensure monthly_entry for row "${row.name || row.id}":`,
+                     result && result.error);
+      }
+    }
+    saveState();
+  }
+
   // Two sequential API calls: salary_records (one row per user per month, may
   // be null for new users) and — only when a record exists — its deductions.
   // Returns { record, deductions } in raw snake_case shape; the applier maps
@@ -1932,6 +1971,7 @@ income:            'Income',
     applyApiSalaryToMonth(apiSalary, currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+    await ensureMonthlyEntriesExist(currentMonth);
     applyApiTransactionsToMonth(apiTransactions, currentMonth);
     buildMonthPicker();
     hideLoadingOverlay();
@@ -2001,6 +2041,7 @@ income:            'Income',
         applyApiSalaryToMonth(apiSalary, currentMonth);
         applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
         applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+        await ensureMonthlyEntriesExist(currentMonth);
         applyApiTransactionsToMonth(apiTransactions, currentMonth);
         closeMonthDropdown();
         buildMonthPicker();
@@ -2818,6 +2859,7 @@ income:            'Income',
     applyApiSalaryToMonth(apiSalary, currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+    await ensureMonthlyEntriesExist(currentMonth);
     applyApiTransactionsToMonth(apiTransactions, currentMonth);
     syncSettingsUI();
     buildMonthPicker();
