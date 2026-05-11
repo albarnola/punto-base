@@ -106,8 +106,19 @@ income:            'Income',
     };
   }
 
-  function newTransaction(amount, date, note = '') {
-    return { id: crypto.randomUUID(), date, amount, note };
+  function newTransaction(amount, date, note = '', extras = {}) {
+    return {
+      id: crypto.randomUUID(),
+      date,
+      amount,
+      note,
+      // Stage 5 fields (populated by applier when reading from Supabase;
+      // defaults are fine for locally-created transactions until Stage 5C
+      // wires writes).
+      monthly_entry_id: extras.monthly_entry_id || null,
+      transaction_type: extras.transaction_type || 'manual',
+      source_id:        extras.source_id        || null,
+    };
   }
 
   function newAdjustment(amount = 0, note = '') {
@@ -498,6 +509,55 @@ income:            'Income',
     ];
     for (const row of allRows) {
       row.adjustments = byCategoryId.get(row.id) || [];
+    }
+  }
+
+  async function loadTransactionsFromApi(monthKey) {
+    if (!window.puntoApi || typeof window.puntoApi.getTransactions !== 'function') {
+      console.warn('puntoApi.getTransactions is not available');
+      return [];
+    }
+    const result = await window.puntoApi.getTransactions(monthKey);
+    if (!result || !result.success) {
+      console.warn('Failed to load transactions from Supabase:', result && result.error);
+      return [];
+    }
+    return result.data || [];
+  }
+
+  // Replace each row's transactions[] with the API's transactions for that
+  // category. Transactions FK to monthly_entries.id, but in-memory rows are
+  // keyed by budget_categories.id (row.id), so we bridge via the joined
+  // monthly_entries.category_id selected in the loader. Idempotent: every
+  // row gets a fresh array (or [] if there are no matching transactions).
+  function applyApiTransactionsToMonth(apiTransactions, monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const byCategoryId = new Map();
+    for (const txn of apiTransactions || []) {
+      const parent = txn.monthly_entries;
+      const categoryId = parent && parent.category_id;
+      if (!categoryId) continue;
+      const list = byCategoryId.get(categoryId);
+      if (list) list.push(txn);
+      else byCategoryId.set(categoryId, [txn]);
+    }
+    const allRows = [
+      ...(md.income || []),
+      ...Object.values(md.categories || {}).flatMap(l => l || []),
+    ];
+    for (const row of allRows) {
+      if (!row.id) continue;
+      const dbTxns = byCategoryId.get(row.id) || [];
+      row.transactions = dbTxns.map(t => ({
+        id:               t.id,
+        date:             t.transaction_date || '',
+        amount:           parseAmount(t.amount),
+        note:             t.description || '',
+        monthly_entry_id: t.monthly_entry_id,
+        transaction_type: t.transaction_type || 'manual',
+        source_id:        t.source_id || null,
+      }));
     }
   }
 
@@ -1858,14 +1918,16 @@ income:            'Income',
     saveState();
     if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
     showLoadingOverlay();
-    const [apiSalary, apiAdjustments, apiEntries] = await Promise.all([
+    const [apiSalary, apiAdjustments, apiEntries, apiTransactions] = await Promise.all([
       loadSalaryFromApi(currentMonth),
       loadAdjustmentsFromApi(currentMonth),
       loadMonthlyEntriesFromApi(currentMonth),
+      loadTransactionsFromApi(currentMonth),
     ]);
     applyApiSalaryToMonth(apiSalary, currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+    applyApiTransactionsToMonth(apiTransactions, currentMonth);
     buildMonthPicker();
     hideLoadingOverlay();
     renderAll();
@@ -1925,14 +1987,16 @@ income:            'Income',
         saveState();
         if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
         showLoadingOverlay();
-        const [apiSalary, apiAdjustments, apiEntries] = await Promise.all([
+        const [apiSalary, apiAdjustments, apiEntries, apiTransactions] = await Promise.all([
           loadSalaryFromApi(currentMonth),
           loadAdjustmentsFromApi(currentMonth),
           loadMonthlyEntriesFromApi(currentMonth),
+          loadTransactionsFromApi(currentMonth),
         ]);
         applyApiSalaryToMonth(apiSalary, currentMonth);
         applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
         applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+        applyApiTransactionsToMonth(apiTransactions, currentMonth);
         closeMonthDropdown();
         buildMonthPicker();
         hideLoadingOverlay();
@@ -2737,17 +2801,19 @@ income:            'Income',
   async function init() {
     showLoadingOverlay();
     initState();
-    const [apiCats, apiSalary, apiAdjustments, apiEntries] = await Promise.all([
+    const [apiCats, apiSalary, apiAdjustments, apiEntries, apiTransactions] = await Promise.all([
       loadCategoriesFromApi(),
       loadSalaryFromApi(currentMonth),
       loadAdjustmentsFromApi(currentMonth),
       loadMonthlyEntriesFromApi(currentMonth),
+      loadTransactionsFromApi(currentMonth),
     ]);
     apiCategoriesCache = apiCats;
     applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
     applyApiSalaryToMonth(apiSalary, currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+    applyApiTransactionsToMonth(apiTransactions, currentMonth);
     syncSettingsUI();
     buildMonthPicker();
     bindSalaryInputFormatting();

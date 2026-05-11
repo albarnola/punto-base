@@ -133,6 +133,32 @@
     }
   }
 
+  async function getTransactions(month) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('transactions')
+        .select(`
+          id,
+          monthly_entry_id,
+          amount,
+          description,
+          transaction_date,
+          transaction_type,
+          source_id,
+          monthly_entries!inner(month, category_id)
+        `)
+        .eq('user_id', userId)
+        .eq('monthly_entries.month', month);
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || [] };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getUserPreferences() {
     try {
       const userId = await getUserId();
@@ -156,6 +182,7 @@
     getSalaryRecord,
     getSalaryDeductions,
     getAdjustments,
+    getTransactions,
     getUserPreferences,
   };
 })();
