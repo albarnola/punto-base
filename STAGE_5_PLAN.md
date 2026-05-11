@@ -91,3 +91,31 @@ b9ebbfc  Add Supabase API helper module (read-only)                            (
 ```
 
 All decisions in this document supersede any conflicting earlier discussion.
+
+## Schema corrections discovered during Stage 5A
+
+Verified against the live Supabase schema on 2026-05-10. These differ from the original session-summary notes; future Stage 5 SQL should reference these names:
+
+### Column naming
+- `monthly_entries.month` (NOT `month_key`) — text, format `YYYY-MM`
+- `salary_records.monthly_taxes` (NOT `taxes`)
+- `salary_records.salary_source` — text, required
+- `salary_records.annual_gross` — numeric, required
+- `salary_deductions.deduction_type` (NOT `type`)
+- `salary_deductions.salary_record_id` — FK to salary_records.id
+- `adjustments.note` — text, nullable
+
+### Soft-delete pattern (deleted_at column)
+The following tables soft-delete via `deleted_at timestamptz`:
+- `budget_categories`
+- `salary_records`
+- `salary_deductions`
+- `adjustments`
+
+`monthly_entries` does NOT have deleted_at — it uses created_at + updated_at only.
+
+`transactions` (the new Stage 5A table) does NOT soft-delete — uses ON DELETE CASCADE. This is a deliberate v1 choice for simplicity. Reconsider in a later phase if audit trail / undelete is needed.
+
+### Budget category linking
+- `budget_categories.is_linked` (boolean, required) — whether this category is auto-managed by salary tab
+- `budget_categories.linked_deduction_id` (uuid, nullable) — FK to salary_deductions.id when is_linked=true. This is the cross-link for the salary-tab → budget-categories integration that Stage 5F will need to handle carefully.
