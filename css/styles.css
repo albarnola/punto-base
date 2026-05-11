@@ -1963,3 +1963,20 @@ tfoot td {
   color: rgba(0, 0, 0, 0.7);
   margin: 0;
 }
+
+/* ============================================================
+   SYNC INDICATOR (header pill)
+   ============================================================ */
+.sync-indicator {
+  display:         inline-block;
+  width:           10px;
+  height:          10px;
+  border-radius:   50%;
+  vertical-align:  middle;
+  transition:      background-color 200ms ease;
+}
+
+.sync-idle    { background: var(--color-text-muted); }
+.sync-pending { background: var(--color-warning);    }
+.sync-synced  { background: var(--color-positive);   }
+.sync-error   { background: var(--color-negative);   }

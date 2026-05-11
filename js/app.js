@@ -75,7 +75,6 @@ income:            'Income',
   const LS_KEY = 'puntobase_budget';
   let state        = null;
   let currentMonth = toMonthKey(new Date());
-  let saveTimer    = null;
   const expandedRows = new Set();
 
   // Cache of Supabase categories from init's fetch, reused on month change
@@ -301,10 +300,15 @@ income:            'Income',
     localStorage.setItem(LS_KEY, JSON.stringify(state));
   }
 
-  function debouncedSave() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveState, 250);
+  function debounce(fn, ms) {
+    let timer = null;
+    return function (...args) {
+      clearTimeout(timer);
+      timer = setTimeout(() => fn.apply(this, args), ms);
+    };
   }
+
+  const debouncedSave = debounce(saveState, 250);
 
   function ensureMonth(key) {
     if (!state.months[key]) {
@@ -423,6 +427,7 @@ income:            'Income',
       if (!row) continue;
       row.expected = parseAmount(entry.expected);
       row.actual   = parseAmount(entry.actual);
+      row.monthly_entry_id = entry.id;
     }
   }
 
@@ -2845,5 +2850,13 @@ income:            'Income',
   } else {
     bootstrap();
   }
+
+  // Flush any pending debounced localStorage write before the page unloads or
+  // is hidden. 5C-3 will extend these to also flush the Supabase write queue
+  // via navigator.sendBeacon.
+  window.addEventListener('beforeunload', () => { saveState(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveState();
+  });
 
 })();

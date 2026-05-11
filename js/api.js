@@ -159,6 +159,48 @@
     }
   }
 
+  async function insertTransaction(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const row = {
+        user_id:          userId,
+        monthly_entry_id: payload.monthly_entry_id,
+        amount:           payload.amount,
+        description:      payload.description || null,
+        transaction_date: payload.transaction_date || null,
+        transaction_type: payload.transaction_type || 'manual',
+        source_id:        payload.source_id || null,
+      };
+      const { data, error } = await client
+        .from('transactions')
+        .insert(row)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function deleteTransaction(id) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { error } = await client
+        .from('transactions')
+        .delete()
+        .eq('id', id);
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getUserPreferences() {
     try {
       const userId = await getUserId();
@@ -183,6 +225,8 @@
     getSalaryDeductions,
     getAdjustments,
     getTransactions,
+    insertTransaction,
+    deleteTransaction,
     getUserPreferences,
   };
 })();
