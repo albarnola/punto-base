@@ -410,6 +410,49 @@ income:            'Income',
     }
   }
 
+  // ============================================================
+  // EXPECTED-EDIT DEBOUNCE (Stage 5D)
+  // ============================================================
+  // Per-monthly_entry_id debounced flushers for Expected writes.
+  // Each row has its own 800ms timer so edits across rows don't coalesce.
+  const expectedFlushers = new Map();
+
+  function flushExpectedWrite(row, section, preEditExpected) {
+    // Re-read current expected at flush time — might have changed during the wait.
+    const currentExpected = row.expected;
+    withRetry(
+      () => window.puntoApi.updateMonthlyEntry({
+        id:       row.monthly_entry_id,
+        expected: currentExpected,
+      }),
+      (err) => {
+        console.warn('updateMonthlyEntry failure, reverting:', err);
+        row.expected = preEditExpected;
+        // Re-render the input value
+        const tr = document.querySelector(`tr[data-id="${row.id}"]`);
+        if (tr) {
+          const input = tr.querySelector('input[data-field="expected"]');
+          if (input) input.value = formatCurrency(preEditExpected);
+        }
+        // Repaint variance + summary
+        updateRowCells(row.id, section);
+        renderSummary();
+        debouncedSave();
+      }
+    );
+  }
+
+  function getExpectedFlusher(monthlyEntryId) {
+    let flusher = expectedFlushers.get(monthlyEntryId);
+    if (!flusher) {
+      flusher = debounce((row, section, capturedPreEditExpected) => {
+        flushExpectedWrite(row, section, capturedPreEditExpected);
+      }, 800);
+      expectedFlushers.set(monthlyEntryId, flusher);
+    }
+    return flusher;
+  }
+
   function ensureMonth(key) {
     if (!state.months[key]) {
       const keys    = Object.keys(state.months).sort();
@@ -1953,6 +1996,7 @@ income:            'Income',
     if (field === 'name') {
       row.name = e.target.value;
     } else if (field === 'expected') {
+      const preEditExpected = row.expected;
       row.expected = parseAmount(e.target.value);
       const actual  = getActual(row, section);
       const { text: varianceText, className: varianceClass } = formatVariance(getEffectiveExpected(row, section), actual, section);
@@ -1962,6 +2006,16 @@ income:            'Income',
         varTd.className   = varianceClass;
       }
       renderSummary();
+      // Stage 5D: Supabase write for Expected.
+      if (!row.monthly_entry_id) {
+        console.warn(
+          `Expected edit on row "${row.name}" has no monthly_entry_id; ` +
+          `skipping Supabase write (locally-created or linked row).`
+        );
+      } else {
+        const flusher = getExpectedFlusher(row.monthly_entry_id);
+        flusher(row, section, preEditExpected);
+      }
     } else if (field === 'subtype') {
       row.subtype = normalizeSubtype(e.target.value, row.name);
       renderSummary();
@@ -2980,6 +3034,22 @@ income:            'Income',
       if (!input) return;
       const tr = input.closest('tr[data-id]');
       if (!tr) return;
+      // Stage 5D: flush any pending Expected write immediately on blur.
+      // Runs before the pending-add / pendingUndo early returns below so
+      // it fires regardless of undo state. The monthly_entry_id guard
+      // catches locally-created rows (no DB row exists yet).
+      if (input.dataset.field === 'expected') {
+        const { id, section } = tr.dataset;
+        const row = findRow(section, id);
+        if (row?.monthly_entry_id) {
+          flushExpectedWrite(row, section, row.expected);
+          // Cancel the still-ticking debounced timer by dropping our
+          // reference. The timer's closure may still fire harmlessly
+          // later with the same data — v1 accepts this as a minor
+          // duplicate-write risk; see STAGE_5_PLAN.md.
+          expectedFlushers.delete(row.monthly_entry_id);
+        }
+      }
       if (pendingAddRow && tr.dataset.id === pendingAddRow.rowId) {
         // Only flush when focus leaves the row entirely (not just tab to next field)
         const relatedTr = e.relatedTarget?.closest?.('tr[data-id]');

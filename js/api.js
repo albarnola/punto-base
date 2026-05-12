@@ -226,6 +226,29 @@
     }
   }
 
+  async function updateMonthlyEntry(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const updates = {
+        expected: payload.expected,
+        // DO NOT include actual — trigger owns it
+        // DO NOT include name — wrong table (Stage 5E)
+      };
+      const { data, error } = await client
+        .from('monthly_entries')
+        .update(updates)
+        .eq('id', payload.id)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getUserPreferences() {
     try {
       const userId = await getUserId();
@@ -253,6 +276,7 @@
     insertTransaction,
     deleteTransaction,
     insertMonthlyEntry,
+    updateMonthlyEntry,
     getUserPreferences,
   };
 })();
