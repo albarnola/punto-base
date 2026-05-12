@@ -453,6 +453,39 @@ income:            'Income',
     return flusher;
   }
 
+  // ── Name-field per-row debounced writer (Stage 5E) ────────────
+  // Mirrors the Expected pattern. section is threaded through closure so
+  // the revert path can look the row up via the existing findRow helper.
+  // Lifecycle (syncBeginWrite/Success/Failure) is handled inside withRetry,
+  // so we do NOT wrap manually.
+  const nameFlushers = new Map();
+
+  function flushNameWrite(rowId, section, newName, preEditName) {
+    withRetry(
+      () => window.puntoApi.updateBudgetCategory({ id: rowId, name: newName }),
+      (err) => {
+        console.warn(`Stage 5E: name write failed for row ${rowId}, reverting to "${preEditName}":`, err);
+        const row = findRow(section, rowId);
+        if (row) {
+          row.name = preEditName;
+          renderAll();
+          debouncedSave();
+        }
+      }
+    );
+  }
+
+  function getNameFlusher(rowId) {
+    let flusher = nameFlushers.get(rowId);
+    if (!flusher) {
+      flusher = debounce((section, newName, preEditName) => {
+        flushNameWrite(rowId, section, newName, preEditName);
+      }, 800);
+      nameFlushers.set(rowId, flusher);
+    }
+    return flusher;
+  }
+
   function ensureMonth(key) {
     if (!state.months[key]) {
       const keys    = Object.keys(state.months).sort();
@@ -1776,6 +1809,13 @@ income:            'Income',
 
     pushUndo(`reorder '${nameA}'`);
 
+    // Stage 5E: capture pre-swap orders BEFORE the tempOrder dance so the
+    // revert path can restore the original values if the Supabase write fails.
+    const preSwapOrderA = rowA.order ?? idx;
+    const preSwapOrderB = rowB.order ?? swapIdx;
+    const rowAId        = rowA.id;
+    const rowBId        = rowB.id;
+
     // Swap orders in the viewed month
     const tempOrder = rowA.order ?? idx;
     rowA.order      = rowB.order ?? swapIdx;
@@ -1802,6 +1842,34 @@ income:            'Income',
 
     renderAll();
     debouncedSave();
+
+    // Stage 5E: write the swap to Supabase. Two parallel UPDATEs via Promise.all
+    // wrapped in withRetry's apiCall so a single retry covers both. The
+    // forward-propagation to future months is a localStorage-era artifact;
+    // sort_order is global per category on the server, so server-side there's
+    // nothing to propagate. Any local divergence in future months self-heals
+    // on next page load.
+    withRetry(
+      async () => {
+        const [resA, resB] = await Promise.all([
+          window.puntoApi.updateBudgetCategory({ id: rowAId, sort_order: rowA.order }),
+          window.puntoApi.updateBudgetCategory({ id: rowBId, sort_order: rowB.order }),
+        ]);
+        if (!resA.success || !resB.success) {
+          return { success: false, error: (resA.error || resB.error || 'partial reorder failure') };
+        }
+        return { success: true };
+      },
+      (err) => {
+        console.warn(`Stage 5E: reorder write failed for rows ${rowAId}, ${rowBId}, reverting:`, err);
+        const rA = findRow(section, rowAId);
+        const rB = findRow(section, rowBId);
+        if (rA) rA.order = preSwapOrderA;
+        if (rB) rB.order = preSwapOrderB;
+        renderAll();
+        debouncedSave();
+      }
+    );
   }
 
   // ============================================================
@@ -1994,7 +2062,13 @@ income:            'Income',
     if (!row) return;
 
     if (field === 'name') {
+      // Stage 5E: write to budget_categories via debounced flusher
+      const preEditName = row.name;  // capture BEFORE mutation
       row.name = e.target.value;
+      if (row.id) {
+        const flusher = getNameFlusher(row.id);
+        flusher(section, row.name, preEditName);
+      }
     } else if (field === 'expected') {
       const preEditExpected = row.expected;
       row.expected = parseAmount(e.target.value);
@@ -2017,8 +2091,21 @@ income:            'Income',
         flusher(row, section, preEditExpected);
       }
     } else if (field === 'subtype') {
+      // Stage 5E: write to budget_categories immediately (<select> is atomic, no debounce)
+      const preEditSubtype = row.subtype;  // capture BEFORE mutation
       row.subtype = normalizeSubtype(e.target.value, row.name);
       renderSummary();
+      if (row.id) {
+        withRetry(
+          () => window.puntoApi.updateBudgetCategory({ id: row.id, subtype: row.subtype }),
+          (err) => {
+            console.warn(`Stage 5E: subtype write failed for row ${row.id}, reverting:`, err);
+            row.subtype = preEditSubtype;
+            renderAll();
+            debouncedSave();
+          }
+        );
+      }
     }
 
     debouncedSave();
@@ -2057,12 +2144,27 @@ income:            'Income',
       const { id, section } = tr.dataset;
       const list    = getRowList(section);
       const idx     = list.findIndex(r => r.id === id);
-      const rowName = list[idx]?.name || 'unnamed';
+      if (idx === -1) return;
+      const rowName    = list[idx]?.name || 'unnamed';
+      const removedRow = list[idx];           // capture for revert
       pushUndo(`delete row '${rowName}'`);
-      if (idx !== -1) list.splice(idx, 1);
+      list.splice(idx, 1);
       expandedRows.delete(id);
       renderAll();
       debouncedSave();
+
+      // Stage 5E: soft-delete in Supabase. Orphan monthly_entries / transactions /
+      // adjustments persist server-side but are silently dropped by the read path
+      // (per Q5/Q6 of pre-work diagnostic).
+      withRetry(
+        () => window.puntoApi.softDeleteBudgetCategory(id),
+        (err) => {
+          console.warn(`Stage 5E: softDeleteBudgetCategory failed for row ${id}, restoring locally:`, err);
+          list.splice(idx, 0, removedRow);  // restore at original index
+          renderAll();
+          debouncedSave();
+        }
+      );
       return;
     }
 
@@ -2145,6 +2247,41 @@ income:            'Income',
       document.getElementById(`${section}-body`)
         ?.querySelector(`tr[data-id="${row.id}"] input`)?.focus();
       debouncedSave();
+
+      // Stage 5E: INSERT into Supabase, then precreate monthly_entry for current month.
+      // ensureMonthlyEntriesExist is awaited INSIDE the apiCall (vs. .then on the
+      // outer withRetry) because withRetry returns undefined, not the API result.
+      withRetry(
+        async () => {
+          const result = await window.puntoApi.insertBudgetCategory({
+            id:                  row.id,           // client UUID
+            name:                row.name || '',
+            section:             section,
+            subtype:             null,             // newRow doesn't set; defaults at render
+            sort_order:          row.order ?? 0,
+            is_linked:           false,
+            linked_deduction_id: null,
+          });
+          if (result && result.success) {
+            // Best-effort precreate of the current month's monthly_entry so 5C-3
+            // transaction writes succeed without the locally-created-row gap.
+            await ensureMonthlyEntriesExist(currentMonth);
+          }
+          return result;
+        },
+        (err) => {
+          // Terminal failure: row was never persisted server-side, undo locally
+          console.warn(`Stage 5E: insertBudgetCategory failed for row ${row.id}, removing locally:`, err);
+          const idx = list.findIndex(r => r.id === row.id);
+          if (idx !== -1) list.splice(idx, 1);
+          expandedRows.delete(row.id);
+          if (pendingAddRow && pendingAddRow.rowId === row.id) {
+            pendingAddRow = null;
+          }
+          renderAll();
+          debouncedSave();
+        }
+      );
     }
   }
 
@@ -3048,6 +3185,17 @@ income:            'Income',
           // later with the same data — v1 accepts this as a minor
           // duplicate-write risk; see STAGE_5_PLAN.md.
           expectedFlushers.delete(row.monthly_entry_id);
+        }
+      }
+      // Stage 5E: flush any pending Name write immediately on blur.
+      // Same v1 cancel-by-recreate pattern as Expected — the pending
+      // debounced timer may fire harmlessly later with the same data.
+      if (input.dataset.field === 'name') {
+        const { id, section } = tr.dataset;
+        const row = findRow(section, id);
+        if (row?.id) {
+          flushNameWrite(row.id, section, row.name, row.name);
+          nameFlushers.delete(row.id);
         }
       }
       if (pendingAddRow && tr.dataset.id === pendingAddRow.rowId) {

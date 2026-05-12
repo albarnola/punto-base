@@ -249,6 +249,86 @@
     }
   }
 
+  async function insertBudgetCategory(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const row = {
+        id:                  payload.id || undefined,  // client UUID precedent
+        user_id:             userId,
+        name:                payload.name,
+        section:             payload.section,
+        subtype:             payload.subtype || null,
+        sort_order:          payload.sort_order ?? 0,
+        is_linked:           payload.is_linked || false,
+        linked_deduction_id: payload.linked_deduction_id || null,
+      };
+      const { data, error } = await client
+        .from('budget_categories')
+        .insert(row)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function updateBudgetCategory({ id, ...fields }) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!id) {
+        return { success: false, error: 'updateBudgetCategory requires id' };
+      }
+      // Whitelist mutable fields
+      const allowed = ['name', 'subtype', 'sort_order'];
+      const update = {};
+      for (const k of allowed) {
+        if (k in fields) update[k] = fields[k];
+      }
+      if (Object.keys(update).length === 0) {
+        return { success: true, data: null };  // no-op
+      }
+      const { data, error } = await client
+        .from('budget_categories')
+        .update(update)
+        .eq('id', id)
+        .eq('user_id', userId)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function softDeleteBudgetCategory(id) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!id) {
+        return { success: false, error: 'softDeleteBudgetCategory requires id' };
+      }
+      const { data, error } = await client
+        .from('budget_categories')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('user_id', userId)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getUserPreferences() {
     try {
       const userId = await getUserId();
@@ -277,6 +357,9 @@
     deleteTransaction,
     insertMonthlyEntry,
     updateMonthlyEntry,
+    insertBudgetCategory,
+    updateBudgetCategory,
+    softDeleteBudgetCategory,
     getUserPreferences,
   };
 })();
