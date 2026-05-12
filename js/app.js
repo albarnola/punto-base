@@ -310,6 +310,106 @@ income:            'Income',
 
   const debouncedSave = debounce(saveState, 250);
 
+  // ============================================================
+  // SYNC INDICATOR (Stage 5C-3-1)
+  // ============================================================
+  // Sync indicator state machine.
+  // States: 'idle' (gray), 'pending' (amber), 'synced' (green, 1.5s
+  // then idle), 'error' (red, until retry queue drains).
+  let syncInFlight = 0;
+  let syncRetryQueueSize = 0;
+  let syncSyncedTimer = null;
+  let syncHasErrorSinceLastDrain = false;
+
+  function setSyncClass(cls) {
+    const el = document.getElementById('sync-indicator');
+    if (!el) return;
+    el.classList.remove('sync-idle', 'sync-pending', 'sync-synced', 'sync-error');
+    el.classList.add(cls);
+    el.setAttribute('aria-label', `Sync status: ${cls.replace('sync-', '')}`);
+  }
+
+  function recomputeSyncState() {
+    // Active work → pending (overrides everything else)
+    if (syncInFlight > 0 || syncRetryQueueSize > 0) {
+      if (syncSyncedTimer) { clearTimeout(syncSyncedTimer); syncSyncedTimer = null; }
+      setSyncClass(syncHasErrorSinceLastDrain ? 'sync-error' : 'sync-pending');
+      return;
+    }
+    // No active work + had an error → error sticks until next successful write
+    if (syncHasErrorSinceLastDrain) {
+      setSyncClass('sync-error');
+      return;
+    }
+    // No active work, no recent error → synced briefly, then idle
+    setSyncClass('sync-synced');
+    if (syncSyncedTimer) clearTimeout(syncSyncedTimer);
+    syncSyncedTimer = setTimeout(() => {
+      setSyncClass('sync-idle');
+      syncSyncedTimer = null;
+    }, 1500);
+  }
+
+  function syncBeginWrite() {
+    syncInFlight++;
+    recomputeSyncState();
+  }
+
+  function syncEndWriteSuccess() {
+    syncInFlight = Math.max(0, syncInFlight - 1);
+    syncHasErrorSinceLastDrain = false;  // success clears the error flag
+    recomputeSyncState();
+  }
+
+  function syncEndWriteFailure() {
+    syncInFlight = Math.max(0, syncInFlight - 1);
+    syncHasErrorSinceLastDrain = true;
+    recomputeSyncState();
+  }
+
+  // Network-error retry with exponential backoff: 1s, 2s, 4s, 8s.
+  // After 4 failed attempts, gives up and calls onFinalFailure.
+  // App-level errors (4xx-equivalent) — i.e., result.success === false
+  // with a non-network friendlyError — are NOT retried; onFinalFailure
+  // fires immediately. The distinction: network errors throw or yield
+  // success:false with no data; app errors yield success:false with a
+  // structured error. For v1 we treat ALL success:false as terminal
+  // (no retry). Anything that throws is a network error and IS retried.
+  //
+  // queueSize tracking lets the sync indicator reflect "something is
+  // pending in retry land."
+  const RETRY_DELAYS = [1000, 2000, 4000, 8000];
+
+  async function withRetry(apiCall, onFinalFailure) {
+    syncBeginWrite();
+    let attempt = 0;
+    while (true) {
+      try {
+        const result = await apiCall();
+        if (result && result.success) {
+          syncEndWriteSuccess();
+          return;
+        }
+        // success:false (app error) — no retry
+        syncEndWriteFailure();
+        onFinalFailure(result?.error || 'Write failed');
+        return;
+      } catch (err) {
+        // Network/throw — eligible for retry
+        if (attempt >= RETRY_DELAYS.length) {
+          syncEndWriteFailure();
+          onFinalFailure(err);
+          return;
+        }
+        syncRetryQueueSize++;
+        recomputeSyncState();
+        await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+        syncRetryQueueSize--;
+        attempt++;
+      }
+    }
+  }
+
   function ensureMonth(key) {
     if (!state.months[key]) {
       const keys    = Object.keys(state.months).sort();
@@ -1679,6 +1779,45 @@ income:            'Income',
     const txn = newTransaction(amount, dateInput.value || getDefaultDate(), noteInput.value.trim());
     row.transactions.push(txn);
 
+    // Optimistic Supabase write (5C-3-1).
+    if (!row.monthly_entry_id) {
+      console.warn(
+        `addTransaction: row "${row.name}" has no monthly_entry_id; ` +
+        `skipping Supabase write. Stage 5E/5F will fix.`
+      );
+    } else {
+      const capturedRow     = row;
+      const capturedTxn     = txn;
+      const capturedRowId   = rowId;
+      const capturedSection = section;
+      withRetry(
+        () => window.puntoApi.insertTransaction({
+          id:               capturedTxn.id,
+          monthly_entry_id: capturedRow.monthly_entry_id,
+          amount:           capturedTxn.amount,
+          description:      capturedTxn.note || null,
+          transaction_date: capturedTxn.date || null,
+          transaction_type: 'manual',
+        }),
+        (err) => {
+          console.warn('addTransaction Supabase failure, reverting:', err);
+          const idx = capturedRow.transactions.findIndex(t => t.id === capturedTxn.id);
+          if (idx !== -1) {
+            capturedRow.transactions.splice(idx, 1);
+            const list = document.getElementById(`txn-list-${capturedRowId}`);
+            const itemEl = list?.querySelector(`[data-txn-id="${capturedTxn.id}"]`);
+            itemEl?.remove();
+            if (list && capturedRow.transactions.length === 0) {
+              list.appendChild(el('p', { className: 'txn-empty', textContent: T('noTransactions') }));
+            }
+            updateRowCells(capturedRowId, capturedSection);
+            renderSummary();
+            debouncedSave();
+          }
+        }
+      );
+    }
+
     const list = document.getElementById(`txn-list-${rowId}`);
     if (list) {
       list.querySelector('.txn-empty')?.remove();
@@ -1700,8 +1839,43 @@ income:            'Income',
     const idx = row.transactions.findIndex(t => t.id === txnId);
     if (idx === -1) return;
     pushUndo(`edit to ${row.name}`);
-    row.transactions.splice(idx, 1);
+    const removedTxn = row.transactions.splice(idx, 1)[0];
     itemEl.remove();
+
+    // Optimistic Supabase write (5C-3-1).
+    if (!row.monthly_entry_id) {
+      console.warn(
+        `removeTransaction: row "${row.name}" has no monthly_entry_id; ` +
+        `skipping Supabase write.`
+      );
+    } else {
+      const capturedRow     = row;
+      const capturedTxn     = removedTxn;
+      const capturedIdx     = idx;
+      const capturedRowId   = rowId;
+      const capturedSection = section;
+      withRetry(
+        () => window.puntoApi.deleteTransaction(capturedTxn.id),
+        (err) => {
+          console.warn('removeTransaction Supabase failure, reverting:', err);
+          capturedRow.transactions.splice(capturedIdx, 0, capturedTxn);
+          const list = document.getElementById(`txn-list-${capturedRowId}`);
+          if (list) {
+            list.querySelector('.txn-empty')?.remove();
+            const restoredEl = renderTransactionItem(capturedTxn, capturedRowId, capturedSection);
+            const siblings = list.querySelectorAll('[data-txn-id]');
+            if (siblings[capturedIdx]) {
+              list.insertBefore(restoredEl, siblings[capturedIdx]);
+            } else {
+              list.appendChild(restoredEl);
+            }
+            updateRowCells(capturedRowId, capturedSection);
+            renderSummary();
+            debouncedSave();
+          }
+        }
+      );
+    }
 
     const list = document.getElementById(`txn-list-${rowId}`);
     if (list && row.transactions.length === 0) {
@@ -2894,8 +3068,10 @@ income:            'Income',
   }
 
   // Flush any pending debounced localStorage write before the page unloads or
-  // is hidden. 5C-3 will extend these to also flush the Supabase write queue
-  // via navigator.sendBeacon.
+  // is hidden.
+  // TODO Stage 5C-3-2 (or 5J): flush in-flight retry queue via
+  // navigator.sendBeacon on beforeunload. For v1 we accept potential
+  // loss of in-retry writes on tab close.
   window.addEventListener('beforeunload', () => { saveState(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') saveState();

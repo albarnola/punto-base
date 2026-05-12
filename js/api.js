@@ -165,6 +165,7 @@
       if (!userId) return notSignedIn();
       const client = await getClient();
       const row = {
+        id:               payload.id || undefined,
         user_id:          userId,
         monthly_entry_id: payload.monthly_entry_id,
         amount:           payload.amount,
