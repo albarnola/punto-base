@@ -329,6 +329,123 @@
     }
   }
 
+  // UPSERT on (user_id, month). Note: the underlying unique constraint is
+  // partial — UNIQUE(user_id, month) WHERE deleted_at IS NULL — so this
+  // relies on PostgreSQL inferring the partial index from the column list.
+  // If PostgREST can't infer it in some environments, 5F-2 will surface
+  // the failure and we can fall back to a check-then-INSERT/UPDATE pattern.
+  async function upsertSalaryRecord(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!payload || !payload.monthKey) {
+        return { success: false, error: 'upsertSalaryRecord requires monthKey' };
+      }
+      const row = {
+        user_id:       userId,
+        month:         payload.monthKey,
+        annual_gross:  payload.annualGross ?? 0,
+        monthly_taxes: payload.monthlyTaxes ?? 0,
+        salary_source: payload.salarySource || 'manual',
+        updated_at:    new Date().toISOString(),
+      };
+      const { data, error } = await client
+        .from('salary_records')
+        .upsert(row, { onConflict: 'user_id,month' })
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function insertSalaryDeduction(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!payload || !payload.salaryRecordId) {
+        return { success: false, error: 'insertSalaryDeduction requires salaryRecordId' };
+      }
+      const row = {
+        salary_record_id: payload.salaryRecordId,
+        user_id:          userId,
+        name:             payload.name || '',
+        amount:           payload.amount ?? 0,
+        deduction_type:   payload.deductionType || 'investment',
+        sort_order:       payload.sortOrder ?? 0,
+      };
+      const { data, error } = await client
+        .from('salary_deductions')
+        .insert(row)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function updateSalaryDeduction(id, fields) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!id) {
+        return { success: false, error: 'updateSalaryDeduction requires id' };
+      }
+      fields = fields || {};
+      // Whitelist + camelCase→snake_case mapping
+      const update = {};
+      if ('name'          in fields) update.name           = fields.name;
+      if ('amount'        in fields) update.amount         = fields.amount;
+      if ('deductionType' in fields) update.deduction_type = fields.deductionType;
+      if ('sortOrder'     in fields) update.sort_order     = fields.sortOrder;
+      if (Object.keys(update).length === 0) {
+        return { success: true, data: null };  // no-op
+      }
+      const { data, error } = await client
+        .from('salary_deductions')
+        .update(update)
+        .eq('id', id)
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function softDeleteSalaryDeduction(id) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!id) {
+        return { success: false, error: 'softDeleteSalaryDeduction requires id' };
+      }
+      const { data, error } = await client
+        .from('salary_deductions')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getUserPreferences() {
     try {
       const userId = await getUserId();
@@ -360,6 +477,10 @@
     insertBudgetCategory,
     updateBudgetCategory,
     softDeleteBudgetCategory,
+    upsertSalaryRecord,
+    insertSalaryDeduction,
+    updateSalaryDeduction,
+    softDeleteSalaryDeduction,
     getUserPreferences,
   };
 })();

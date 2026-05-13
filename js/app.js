@@ -563,6 +563,11 @@ income:            'Income',
       if (!localSection) continue;
       const row = newRow(cat.name || '', 0, cat.sort_order ?? 0);
       row.id = cat.id;
+      // Stage 5F-1: propagate linked-row flags. Today nothing in the app
+      // writes is_linked=true, so existing data loads as false/null —
+      // matching prior behavior. 5F-3 will populate these for real.
+      row.isLinked         = cat.is_linked === true;
+      row.linkedDeductionId = cat.linked_deduction_id || null;
       if (localSection === 'savings') {
         row.subtype = SUBTYPES.includes(cat.subtype)
           ? cat.subtype
@@ -2259,8 +2264,8 @@ income:            'Income',
             section:             section,
             subtype:             null,             // newRow doesn't set; defaults at render
             sort_order:          row.order ?? 0,
-            is_linked:           false,
-            linked_deduction_id: null,
+            is_linked:           row.isLinked === true,
+            linked_deduction_id: row.linkedDeductionId || null,
           });
           if (result && result.success) {
             // Best-effort precreate of the current month's monthly_entry so 5C-3
