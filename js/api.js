@@ -479,6 +479,32 @@
     }
   }
 
+  // Stage 5F-2.1: batch soft-delete every active deduction for a given
+  // salary_record. One PostgREST PATCH affects all matching rows — single
+  // round-trip regardless of N. Used by dualWriteSalaryMonthToApi to make
+  // the DB state for a month exactly match in-memory state (cleanup-then-
+  // insert), which prevents duplicate deductions from apply-forward.
+  async function softDeleteSalaryDeductionsForRecord(salaryRecordId) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!salaryRecordId) {
+        return { success: false, error: 'softDeleteSalaryDeductionsForRecord requires salaryRecordId' };
+      }
+      const { error } = await client
+        .from('salary_deductions')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('salary_record_id', salaryRecordId)
+        .eq('user_id', userId)
+        .is('deleted_at', null);
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getUserPreferences() {
     try {
       const userId = await getUserId();
@@ -514,6 +540,7 @@
     insertSalaryDeduction,
     updateSalaryDeduction,
     softDeleteSalaryDeduction,
+    softDeleteSalaryDeductionsForRecord,
     getUserPreferences,
   };
 })();

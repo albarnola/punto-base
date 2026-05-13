@@ -743,14 +743,21 @@ income:            'Income',
   }
 
   // ============================================================
-  // SALARY DUAL-WRITE (Stage 5F-2)
+  // SALARY DUAL-WRITE (Stage 5F-2 + 5F-2.1 cleanup)
   // ============================================================
-  // Writes one month's salary record + all its deductions to Supabase.
+  // Make DB state for one month exactly match in-memory state. Idempotent:
+  // soft-deletes any existing salary_deductions for the salary_record
+  // BEFORE inserting the current set. Without the cleanup step, apply-
+  // forward to a previously-visited month would duplicate deductions —
+  // cloneSalaryData wipes salaryRecordId stamps, so old DB rows would
+  // accumulate alongside fresh inserts.
+  //
   // Best-effort: localStorage is authoritative; failures are logged.
-  // Stamps the returned salary_record id onto rec.id and stamps
-  // salaryRecordId onto each deduction so subsequent edits can target
-  // the DB rows. Each deduction's client UUID is passed through to the
-  // INSERT so future updates don't need an id swap.
+  // Each deduction's client UUID is passed through to the INSERT so DOM
+  // data-deduction-id attributes stay valid through the round-trip.
+  // No caller today re-inserts deductions whose ids already exist in the
+  // DB — 5F-3+ would need to revisit this if that changes (PK collision
+  // risk on the freshly-inserted ids).
   async function dualWriteSalaryMonthToApi(monthKey) {
     const rec = state.salaryData?.[monthKey];
     if (!rec) return;
@@ -772,9 +779,25 @@ income:            'Income',
     rec.id = recResult.data.id;
     const recordId = recResult.data.id;
 
-    const newDeductions = (rec.deductions || []).filter(d => !d.salaryRecordId);
-    if (newDeductions.length === 0) return;
-    const results = await Promise.all(newDeductions.map((d, idx) =>
+    // Stage 5F-2.1: batch-soft-delete every existing deduction for this
+    // salary_record. One PATCH regardless of N. Initial-month case is a
+    // no-op (no existing rows match). Proceed even if cleanup fails —
+    // worst case is duplicates, which is recoverable; better than aborting
+    // the upsert and leaving the month with no deductions at all.
+    if (typeof window.puntoApi.softDeleteSalaryDeductionsForRecord === 'function') {
+      const cleanupResult = await window.puntoApi.softDeleteSalaryDeductionsForRecord(recordId);
+      if (!cleanupResult || !cleanupResult.success) {
+        console.warn(`5F-2.1 cleanup failed at softDeleteSalaryDeductionsForRecord (${monthKey}):`,
+                     cleanupResult && cleanupResult.error);
+      }
+    }
+
+    // Insert all current in-memory deductions as fresh DB rows. No longer
+    // filters by `!d.salaryRecordId` — the cleanup above means any prior
+    // DB state is gone, so we want to insert everything in-memory.
+    const deductions = rec.deductions || [];
+    if (deductions.length === 0) return;
+    const results = await Promise.all(deductions.map((d, idx) =>
       window.puntoApi.insertSalaryDeduction({
         id:             d.id,                  // pass client UUID
         salaryRecordId: recordId,
@@ -784,14 +807,14 @@ income:            'Income',
         sortOrder:      idx,
       })
     ));
-    for (let i = 0; i < newDeductions.length; i++) {
-      const d = newDeductions[i];
+    for (let i = 0; i < deductions.length; i++) {
+      const d = deductions[i];
       const r = results[i];
       if (r && r.success && r.data && r.data.id) {
         d.salaryRecordId = recordId;
         // d.id stays the same (we passed it in)
       } else {
-        console.warn(`5F-2 dual-write failed at insertSalaryDeduction (${d.name}):`,
+        console.warn(`5F-2.1 dual-write failed at insertSalaryDeduction (${d.name}):`,
                      r && r.error);
       }
     }
