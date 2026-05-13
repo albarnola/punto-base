@@ -81,6 +81,18 @@ income:            'Income',
   // to re-stamp row IDs.
   let apiCategoriesCache = null;
 
+  // Stage 5F-3: bridge between syncBudgetWithSalary's synthesized linked rows
+  // (transient, render-time disposable) and the real server-side budget_
+  // categories rows backing them. Key: normalized deduction name. Value:
+  // { budgetCategoryId, monthlyEntryIdByMonth: Map<monthKey, monthlyEntryId> }.
+  // budget_categories is spanning (one row per user per name) but
+  // monthly_entries is per-month, hence the nested Map.
+  const linkedBudgetCategoryIds = new Map();
+
+  function normalizeDeductionName(name) {
+    return (name || '').trim().toLowerCase();
+  }
+
   // Undo / redo
   const undoStack   = [];
   const redoStack   = [];
@@ -563,7 +575,7 @@ income:            'Income',
   function getSalaryDeductionFlusher(deductionId) {
     let flusher = salaryDeductionFlushers.get(deductionId);
     if (!flusher) {
-      flusher = debounce((fields) => {
+      flusher = debounce((fields, ded, monthKey) => {
         if (!window.puntoApi || typeof window.puntoApi.updateSalaryDeduction !== 'function') return;
         window.puntoApi.updateSalaryDeduction(deductionId, fields).then(r => {
           if (!r || !r.success) {
@@ -571,6 +583,14 @@ income:            'Income',
                          r && r.error);
           }
         });
+        // Stage 5F-3: when name stabilizes (after the typing debounce),
+        // attempt to promote the deduction to a real budget_categories row
+        // for this month. Idempotent — no-op for empty names, no-op if
+        // already promoted (Map lookup hit). Fires for investment-type
+        // only (the helper guards on this).
+        if (ded && monthKey) {
+          promoteDeductionToCategory(ded, monthKey);
+        }
       }, 800);
       salaryDeductionFlushers.set(deductionId, flusher);
     }
@@ -694,12 +714,31 @@ income:            'Income',
     for (const list of Object.values(md.categories || {})) {
       for (const row of list || []) byId.set(row.id, row);
     }
+    // Stage 5F-3: also build a reverse Map of budgetCategoryId → linkedEntry
+    // so we can populate monthlyEntryIdByMonth for entries belonging to
+    // linked (synthesized) rows whose in-memory id won't match category_id.
+    const linkedByCategoryId = new Map();
+    for (const linkedEntry of linkedBudgetCategoryIds.values()) {
+      if (linkedEntry && linkedEntry.budgetCategoryId) {
+        linkedByCategoryId.set(linkedEntry.budgetCategoryId, linkedEntry);
+      }
+    }
     for (const entry of entries || []) {
       const row = byId.get(entry.category_id);
-      if (!row) continue;
-      row.expected = parseAmount(entry.expected);
-      row.actual   = parseAmount(entry.actual);
-      row.monthly_entry_id = entry.id;
+      if (row) {
+        row.expected = parseAmount(entry.expected);
+        row.actual   = parseAmount(entry.actual);
+        row.monthly_entry_id = entry.id;
+        continue;
+      }
+      // No in-memory row matched — check if this entry belongs to a linked
+      // budget_category we know about. If so, stash its monthly_entry_id
+      // into the bridge Map so 5F-4 can write salary_seed transactions
+      // against it.
+      const linkedEntry = linkedByCategoryId.get(entry.category_id);
+      if (linkedEntry) {
+        linkedEntry.monthlyEntryIdByMonth.set(monthKey, entry.id);
+      }
     }
   }
 
@@ -818,6 +857,15 @@ income:            'Income',
                      r && r.error);
       }
     }
+
+    // Stage 5F-3 (Part B): for each investment-type deduction, ensure a
+    // real budget_categories row exists (spanning across months — one per
+    // user per name) AND a monthly_entries row for THIS month. Idempotent.
+    // Parallel across deductions; per-deduction the helper is sequential
+    // (insertBudgetCategory → insertMonthlyEntry).
+    await Promise.all(
+      deductions.map(d => promoteDeductionToCategory(d, monthKey))
+    );
   }
 
   // After applyApiSalaryToMonth runs, the in-memory record either has a
@@ -829,6 +877,103 @@ income:            'Income',
     if (!rec) return;
     if (rec.id) return;  // DB already has it
     await dualWriteSalaryMonthToApi(monthKey);
+  }
+
+  // ============================================================
+  // LINKED-CATEGORY PROMOTION (Stage 5F-3)
+  // ============================================================
+  // Boot-time: load every is_linked=true budget_category into the bridge
+  // Map. budget_categories is spanning (one row per user per name) so the
+  // hydration is independent of which month the user lands on. Without
+  // this, navigating to an unvisited month and adding a deduction whose
+  // name matches an existing-elsewhere linked category would create a
+  // duplicate budget_categories row.
+  async function hydrateLinkedBudgetCategoryIds() {
+    if (!window.puntoApi || typeof window.puntoApi.listLinkedBudgetCategories !== 'function') {
+      console.warn('5F-3 hydration skipped: puntoApi.listLinkedBudgetCategories unavailable');
+      return;
+    }
+    const result = await window.puntoApi.listLinkedBudgetCategories();
+    if (!result || !result.success) {
+      console.warn('5F-3 hydration failed at listLinkedBudgetCategories:', result && result.error);
+      return;
+    }
+    for (const row of (result.data || [])) {
+      const key = normalizeDeductionName(row.name);
+      if (!key) continue;
+      if (!linkedBudgetCategoryIds.has(key)) {
+        linkedBudgetCategoryIds.set(key, {
+          budgetCategoryId: row.id,
+          monthlyEntryIdByMonth: new Map(),
+        });
+      }
+    }
+  }
+
+  // Promote an investment-type salary deduction to a real budget_categories
+  // row (if not already present) AND ensure a monthly_entries row exists
+  // for the given month. Idempotent: safe to call repeatedly. Updates
+  // linkedBudgetCategoryIds in place. Best-effort: failures are logged.
+  //
+  // Does NOT touch the synthesized row in md.categories.pretaxInvestments.
+  // The synthesized row keeps its disposable client UUID forever; this
+  // helper produces the parallel server-side identity that 5F-4 will use
+  // to write salary_seed transactions.
+  async function promoteDeductionToCategory(deduction, monthKey) {
+    if (!deduction) return;
+    if ((deduction.type || 'investment') !== 'investment') return; // expense-type stays Salary-only
+    const name = (deduction.name || '').trim();
+    if (!name) return;  // empty name — wait for the user to type something
+    const key = normalizeDeductionName(name);
+    if (!window.puntoApi) return;
+
+    let entry = linkedBudgetCategoryIds.get(key);
+
+    if (!entry) {
+      // No existing budget_category for this name — INSERT one.
+      if (typeof window.puntoApi.insertBudgetCategory !== 'function') return;
+      // Compute sort_order from the current month's pretaxInvestments list
+      // so the new row sits at the end of that section visually. Other
+      // months' lists may have different lengths; this is best-effort.
+      const md = state.months?.[monthKey];
+      const list = md?.categories?.pretaxInvestments || [];
+      const nextOrder = list.reduce((m, r) => Math.max(m, r.order ?? 0), -1) + 1;
+      const result = await window.puntoApi.insertBudgetCategory({
+        name,
+        section:             'pretaxInvestments',
+        subtype:             null,
+        sort_order:          nextOrder,
+        is_linked:           true,
+        linked_deduction_id: null,  // see architectural note in 5F-3 prompt
+      });
+      if (!result || !result.success || !result.data || !result.data.id) {
+        console.error('5F-3 promote failed at insertBudgetCategory for deduction:',
+                      deduction.id, name, result && result.error);
+        return;
+      }
+      entry = {
+        budgetCategoryId: result.data.id,
+        monthlyEntryIdByMonth: new Map(),
+      };
+      linkedBudgetCategoryIds.set(key, entry);
+    }
+
+    // Ensure a monthly_entries row for this month. Skip if we already
+    // tracked one (from boot hydration or a prior call).
+    if (entry.monthlyEntryIdByMonth.has(monthKey)) return;
+    if (typeof window.puntoApi.insertMonthlyEntry !== 'function') return;
+    const meResult = await window.puntoApi.insertMonthlyEntry({
+      category_id: entry.budgetCategoryId,
+      month:       monthKey,
+      expected:    0,
+      actual:      0,
+    });
+    if (meResult && meResult.success && meResult.data && meResult.data.id) {
+      entry.monthlyEntryIdByMonth.set(monthKey, meResult.data.id);
+    } else {
+      console.warn(`5F-3 promote: monthly_entries insert failed for "${name}" / ${monthKey}:`,
+                   meResult && meResult.error);
+    }
   }
 
   // Two sequential API calls: salary_records (one row per user per month, may
@@ -3121,7 +3266,7 @@ income:            'Income',
         if (field === 'amount') apiFields.amount = ded.amount;
         if (field === 'type')   apiFields.deductionType = ded.type;
         if (Object.keys(apiFields).length > 0) {
-          getSalaryDeductionFlusher(ded.id)(apiFields);
+          getSalaryDeductionFlusher(ded.id)(apiFields, ded, currentMonth);
         }
       } else {
         console.warn(`5F-2: deduction edit skipped — no DB id yet for "${ded.name}"`);
@@ -3519,12 +3664,16 @@ income:            'Income',
   async function init() {
     showLoadingOverlay();
     initState();
+    // Stage 5F-3: hydrate linkedBudgetCategoryIds in parallel with the rest.
+    // hydrateLinkedBudgetCategoryIds writes directly to the module-scope Map,
+    // so no destructuring needed — just await it alongside the others.
     const [apiCats, apiSalary, apiAdjustments, apiEntries, apiTransactions] = await Promise.all([
       loadCategoriesFromApi(),
       loadSalaryFromApi(currentMonth),
       loadAdjustmentsFromApi(currentMonth),
       loadMonthlyEntriesFromApi(currentMonth),
       loadTransactionsFromApi(currentMonth),
+      hydrateLinkedBudgetCategoryIds(),
     ]);
     apiCategoriesCache = apiCats;
     applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);

@@ -61,6 +61,28 @@
     }
   }
 
+  // Stage 5F-3: one-shot boot hydration of every is_linked=true budget_category.
+  // budget_categories are spanning (one row per user per category, not per
+  // month), so this Map needs to be populated independent of which month the
+  // user lands on at boot. Returns { id, name } per row.
+  async function listLinkedBudgetCategories() {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('budget_categories')
+        .select('id, name')
+        .eq('user_id', userId)
+        .eq('is_linked', true)
+        .is('deleted_at', null);
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || [] };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getMonthlyEntries(month) {
     try {
       const userId = await getUserId();
@@ -284,8 +306,9 @@
       if (!id) {
         return { success: false, error: 'updateBudgetCategory requires id' };
       }
-      // Whitelist mutable fields
-      const allowed = ['name', 'subtype', 'sort_order'];
+      // Whitelist mutable fields. Stage 5F-3 adds is_linked + linked_deduction_id
+      // for 5F-4's orphan-promote case (manual row → marked linked).
+      const allowed = ['name', 'subtype', 'sort_order', 'is_linked', 'linked_deduction_id'];
       const update = {};
       for (const k of allowed) {
         if (k in fields) update[k] = fields[k];
@@ -524,6 +547,7 @@
 
   window.puntoApi = {
     getCategories,
+    listLinkedBudgetCategories,
     getMonthlyEntries,
     getSalaryRecord,
     getSalaryDeductions,
