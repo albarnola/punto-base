@@ -301,11 +301,49 @@ income:            'Income',
   }
 
   function debounce(fn, ms) {
-    let timer = null;
-    return function (...args) {
+    let timer    = null;
+    let lastArgs = null;
+    let lastThis = null;
+
+    const debounced = function (...args) {
+      lastArgs = args;
+      lastThis = this;
       clearTimeout(timer);
-      timer = setTimeout(() => fn.apply(this, args), ms);
+      timer = setTimeout(() => {
+        timer = null;
+        const a = lastArgs;
+        const t = lastThis;
+        lastArgs = null;
+        lastThis = null;
+        fn.apply(t, a);
+      }, ms);
     };
+
+    // Force a pending invocation to fire NOW (synchronously). No-op if no
+    // call is pending. Used by flushSalaryEditSession + beforeunload to
+    // close the localStorage-vs-Supabase drift window.
+    debounced.flush = function () {
+      if (timer === null) return;
+      clearTimeout(timer);
+      timer = null;
+      if (lastArgs) {
+        const a = lastArgs;
+        const t = lastThis;
+        lastArgs = null;
+        lastThis = null;
+        fn.apply(t, a);
+      }
+    };
+
+    // Drop any pending invocation without firing it.
+    debounced.cancel = function () {
+      clearTimeout(timer);
+      timer    = null;
+      lastArgs = null;
+      lastThis = null;
+    };
+
+    return debounced;
   }
 
   const debouncedSave = debounce(saveState, 250);
@@ -486,6 +524,59 @@ income:            'Income',
     return flusher;
   }
 
+  // ── Salary-record debounced writer (Stage 5F-2) ───────────────
+  // One debouncer per month. Used by the gross / taxes inputs which
+  // mutate the salary_record row directly.
+  const salaryRecordFlushers = new Map();
+
+  function getSalaryRecordFlusher(monthKey) {
+    let flusher = salaryRecordFlushers.get(monthKey);
+    if (!flusher) {
+      flusher = debounce(() => {
+        const rec = state.salaryData?.[monthKey];
+        if (!rec) return;
+        if (!window.puntoApi || typeof window.puntoApi.upsertSalaryRecord !== 'function') return;
+        window.puntoApi.upsertSalaryRecord({
+          monthKey,
+          annualGross:  parseAmount(rec.annualGross),
+          monthlyTaxes: parseAmount(rec.taxes),
+          salarySource: rec.salarySource || 'manual',
+        }).then(r => {
+          if (r && r.success && r.data) {
+            rec.id = r.data.id;
+          } else {
+            console.warn(`5F-2 dual-write failed at upsertSalaryRecord (${monthKey}):`,
+                         r && r.error);
+          }
+        });
+      }, 800);
+      salaryRecordFlushers.set(monthKey, flusher);
+    }
+    return flusher;
+  }
+
+  // ── Salary-deduction debounced writer (Stage 5F-2) ────────────
+  // One debouncer per deduction id. The deduction's id is the client
+  // UUID stamped by newDeduction + passed through to the DB on INSERT.
+  const salaryDeductionFlushers = new Map();
+
+  function getSalaryDeductionFlusher(deductionId) {
+    let flusher = salaryDeductionFlushers.get(deductionId);
+    if (!flusher) {
+      flusher = debounce((fields) => {
+        if (!window.puntoApi || typeof window.puntoApi.updateSalaryDeduction !== 'function') return;
+        window.puntoApi.updateSalaryDeduction(deductionId, fields).then(r => {
+          if (!r || !r.success) {
+            console.warn(`5F-2 dual-write failed at updateSalaryDeduction (${deductionId}):`,
+                         r && r.error);
+          }
+        });
+      }, 800);
+      salaryDeductionFlushers.set(deductionId, flusher);
+    }
+    return flusher;
+  }
+
   function ensureMonth(key) {
     if (!state.months[key]) {
       const keys    = Object.keys(state.months).sort();
@@ -649,6 +740,72 @@ income:            'Income',
       }
     }
     saveState();
+  }
+
+  // ============================================================
+  // SALARY DUAL-WRITE (Stage 5F-2)
+  // ============================================================
+  // Writes one month's salary record + all its deductions to Supabase.
+  // Best-effort: localStorage is authoritative; failures are logged.
+  // Stamps the returned salary_record id onto rec.id and stamps
+  // salaryRecordId onto each deduction so subsequent edits can target
+  // the DB rows. Each deduction's client UUID is passed through to the
+  // INSERT so future updates don't need an id swap.
+  async function dualWriteSalaryMonthToApi(monthKey) {
+    const rec = state.salaryData?.[monthKey];
+    if (!rec) return;
+    if (!window.puntoApi || typeof window.puntoApi.upsertSalaryRecord !== 'function') {
+      console.warn('5F-2 dual-write skipped: puntoApi.upsertSalaryRecord unavailable');
+      return;
+    }
+    const recResult = await window.puntoApi.upsertSalaryRecord({
+      monthKey,
+      annualGross:  parseAmount(rec.annualGross),
+      monthlyTaxes: parseAmount(rec.taxes),
+      salarySource: rec.salarySource || 'manual',
+    });
+    if (!recResult || !recResult.success || !recResult.data) {
+      console.warn(`5F-2 dual-write failed at upsertSalaryRecord (${monthKey}):`,
+                   recResult && recResult.error);
+      return;
+    }
+    rec.id = recResult.data.id;
+    const recordId = recResult.data.id;
+
+    const newDeductions = (rec.deductions || []).filter(d => !d.salaryRecordId);
+    if (newDeductions.length === 0) return;
+    const results = await Promise.all(newDeductions.map((d, idx) =>
+      window.puntoApi.insertSalaryDeduction({
+        id:             d.id,                  // pass client UUID
+        salaryRecordId: recordId,
+        name:           d.name,
+        amount:         parseAmount(d.amount),
+        deductionType:  d.type || 'investment',
+        sortOrder:      idx,
+      })
+    ));
+    for (let i = 0; i < newDeductions.length; i++) {
+      const d = newDeductions[i];
+      const r = results[i];
+      if (r && r.success && r.data && r.data.id) {
+        d.salaryRecordId = recordId;
+        // d.id stays the same (we passed it in)
+      } else {
+        console.warn(`5F-2 dual-write failed at insertSalaryDeduction (${d.name}):`,
+                     r && r.error);
+      }
+    }
+  }
+
+  // After applyApiSalaryToMonth runs, the in-memory record either has a
+  // .id (DB had a row) or doesn't (DB had nothing — applyApiSalaryToMonth
+  // early-returned, leaving the ensureSalaryMonth skeleton). In the latter
+  // case, fire the dual-write to push the skeleton up.
+  async function ensureSalaryRecordExists(monthKey) {
+    const rec = state.salaryData?.[monthKey];
+    if (!rec) return;
+    if (rec.id) return;  // DB already has it
+    await dualWriteSalaryMonthToApi(monthKey);
   }
 
   // Two sequential API calls: salary_records (one row per user per month, may
@@ -2339,6 +2496,7 @@ income:            'Income',
       loadTransactionsFromApi(currentMonth),
     ]);
     applyApiSalaryToMonth(apiSalary, currentMonth);
+    await ensureSalaryRecordExists(currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     await ensureMonthlyEntriesExist(currentMonth);
@@ -2409,6 +2567,7 @@ income:            'Income',
           loadTransactionsFromApi(currentMonth),
         ]);
         applyApiSalaryToMonth(apiSalary, currentMonth);
+        await ensureSalaryRecordExists(currentMonth);
         applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
         applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
         await ensureMonthlyEntriesExist(currentMonth);
@@ -2709,6 +2868,14 @@ income:            'Income',
 
     saveState();
     renderAll();
+
+    // Stage 5F-2: dual-write each future month. Serialize per-month so the
+    // salary_record upsert lands before its deduction inserts.
+    (async () => {
+      for (const k of futureKeys) {
+        await dualWriteSalaryMonthToApi(k);
+      }
+    })();
   }
 
   function renderDeductions(rec) {
@@ -2816,6 +2983,16 @@ income:            'Income',
     salaryEditSession.timer = setTimeout(endSalaryEditSession, SALARY_DEBOUNCE_MS);
   }
 
+  // Force any pending salary debounced writes (record + per-deduction) to
+  // fire NOW. Used by flushSalaryEditSession and beforeunload to close the
+  // localStorage-vs-Supabase drift window when the user leaves the page
+  // within the 800ms debounce window. Fire-and-forget (synchronous fire of
+  // the inner fn, which schedules its own async upsert/update).
+  function flushPendingSalaryApiWrites() {
+    salaryRecordFlushers.forEach(f => { try { f.flush(); } catch (e) {} });
+    salaryDeductionFlushers.forEach(f => { try { f.flush(); } catch (e) {} });
+  }
+
   function flushSalaryEditSession() {
     if (!salaryEditSession) return;
     clearTimeout(salaryEditSession.timer);
@@ -2824,6 +3001,9 @@ income:            'Income',
     if (JSON.stringify(state) === JSON.stringify(session.snapshot)) return;
     pushUndo('salary edit', session.snapshot);
     saveState();
+    // Stage 5F-2: flush any pending salary API writes too, so the DB
+    // matches localStorage after the user leaves the tab / closes the page.
+    flushPendingSalaryApiWrites();
   }
 
   function endSalaryEditSession() {
@@ -2850,6 +3030,13 @@ income:            'Income',
       }
       saveState();
       renderSalary();
+
+      // Stage 5F-2: dual-write each cloned future month, serialized.
+      (async () => {
+        for (const k of targets) {
+          await dualWriteSalaryMonthToApi(k);
+        }
+      })();
     }
   }
 
@@ -2874,6 +3061,8 @@ income:            'Income',
       beginSalaryEditSession();
       renderSalaryDerived();
       debouncedSave();
+      // Stage 5F-2: debounced dual-write to salary_records.
+      getSalaryRecordFlusher(currentMonth)();
       return;
     }
     if (target.id === 'salary-taxes') {
@@ -2883,6 +3072,8 @@ income:            'Income',
       beginSalaryEditSession();
       renderSalaryDerived();
       debouncedSave();
+      // Stage 5F-2: debounced dual-write to salary_records.
+      getSalaryRecordFlusher(currentMonth)();
       return;
     }
     const dedRow = target.closest('[data-deduction-id]');
@@ -2898,6 +3089,22 @@ income:            'Income',
       beginSalaryEditSession();
       if (field === 'amount') renderSalaryDerived();
       debouncedSave();
+      // Stage 5F-2: debounced dual-write to salary_deductions. Skip if no
+      // DB id yet (race with ensureSalaryRecordExists for fresh months —
+      // localStorage stays authoritative; 5H migration catches drift).
+      if (ded.id && ded.salaryRecordId) {
+        const apiFields = {};
+        if (field === 'name')   apiFields.name = ded.name;
+        if (field === 'amount') apiFields.amount = ded.amount;
+        if (field === 'type')   apiFields.deductionType = ded.type;
+        if (Object.keys(apiFields).length > 0) {
+          getSalaryDeductionFlusher(ded.id)(apiFields);
+        }
+      } else {
+        console.warn(`5F-2: deduction edit skipped — no DB id yet for "${ded.name}"`);
+      }
+      // Also dual-write the salary_record so updated_at reflects the edit.
+      getSalaryRecordFlusher(currentMonth)();
     }
   }
 
@@ -2912,7 +3119,8 @@ income:            'Income',
       pushUndo('add deduction');
       const rec = getSalaryRecord(currentMonth);
       rec.deductions = rec.deductions || [];
-      rec.deductions.push(newDeduction('', 0));
+      const newDed = newDeduction('', 0);
+      rec.deductions.push(newDed);
       rec.salarySource = 'manual';
       saveState();
       renderDeductions(rec);
@@ -2920,6 +3128,32 @@ income:            'Income',
       const wrap = document.getElementById('salary-deductions');
       const lastRow = wrap?.lastElementChild;
       lastRow?.querySelector('input[data-deduction-field="name"]')?.focus();
+      // Stage 5F-2: dual-write the new deduction. Needs rec.id (the
+      // salary_record's UUID). If missing, fall back to a full month
+      // dual-write which will upsert the record AND insert this deduction.
+      if (window.puntoApi && typeof window.puntoApi.insertSalaryDeduction === 'function') {
+        if (rec.id) {
+          const sortOrder = rec.deductions.length - 1;
+          window.puntoApi.insertSalaryDeduction({
+            id:             newDed.id,
+            salaryRecordId: rec.id,
+            name:           newDed.name,
+            amount:         parseAmount(newDed.amount),
+            deductionType:  newDed.type || 'investment',
+            sortOrder,
+          }).then(r => {
+            if (r && r.success && r.data) {
+              newDed.salaryRecordId = rec.id;
+            } else {
+              console.warn(`5F-2 dual-write failed at insertSalaryDeduction (add):`,
+                           r && r.error);
+            }
+          });
+        } else {
+          // No salary_record id yet — kick off a full month dual-write.
+          dualWriteSalaryMonthToApi(currentMonth);
+        }
+      }
       return;
     }
 
@@ -2930,11 +3164,29 @@ income:            'Income',
       flushSalaryEditSession();
       pushUndo('delete deduction');
       const rec = getSalaryRecord(currentMonth);
-      rec.deductions = (rec.deductions || []).filter(d => d.id !== dedRow.dataset.deductionId);
+      const dedId = dedRow.dataset.deductionId;
+      const removedDed = (rec.deductions || []).find(d => d.id === dedId) || null;
+      rec.deductions = (rec.deductions || []).filter(d => d.id !== dedId);
       rec.salarySource = 'manual';
       saveState();
       renderDeductions(rec);
       renderSalaryDerived();
+      // Stage 5F-2: soft-delete the deduction in Supabase. Hybrid past-
+      // month preservation (per STAGE_5_PLAN.md) is 5F-4's job; here we
+      // just soft-delete the salary_deduction row.
+      if (removedDed && removedDed.salaryRecordId
+          && window.puntoApi && typeof window.puntoApi.softDeleteSalaryDeduction === 'function') {
+        window.puntoApi.softDeleteSalaryDeduction(removedDed.id).then(r => {
+          if (!r || !r.success) {
+            console.warn(`5F-2 dual-write failed at softDeleteSalaryDeduction (${removedDed.id}):`,
+                         r && r.error);
+          }
+        });
+        // Drop the (now-stale) debouncer reference for the removed id.
+        salaryDeductionFlushers.delete(removedDed.id);
+      } else if (removedDed) {
+        console.warn(`5F-2: skipped softDeleteSalaryDeduction — no DB id for "${removedDed.name}"`);
+      }
     }
   }
 
@@ -3254,6 +3506,7 @@ income:            'Income',
     apiCategoriesCache = apiCats;
     applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
     applyApiSalaryToMonth(apiSalary, currentMonth);
+    await ensureSalaryRecordExists(currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
     await ensureMonthlyEntriesExist(currentMonth);
@@ -3291,13 +3544,21 @@ income:            'Income',
   }
 
   // Flush any pending debounced localStorage write before the page unloads or
-  // is hidden.
+  // is hidden. 5F-2 extends this to also flush pending salary API writes —
+  // fire-and-forget, hands the request to the browser's network stack
+  // before the page tears down.
   // TODO Stage 5C-3-2 (or 5J): flush in-flight retry queue via
   // navigator.sendBeacon on beforeunload. For v1 we accept potential
   // loss of in-retry writes on tab close.
-  window.addEventListener('beforeunload', () => { saveState(); });
+  window.addEventListener('beforeunload', () => {
+    saveState();
+    flushPendingSalaryApiWrites();
+  });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') saveState();
+    if (document.visibilityState === 'hidden') {
+      saveState();
+      flushPendingSalaryApiWrites();
+    }
   });
 
 })();

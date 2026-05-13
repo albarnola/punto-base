@@ -329,11 +329,13 @@
     }
   }
 
-  // UPSERT on (user_id, month). Note: the underlying unique constraint is
-  // partial — UNIQUE(user_id, month) WHERE deleted_at IS NULL — so this
-  // relies on PostgreSQL inferring the partial index from the column list.
-  // If PostgREST can't infer it in some environments, 5F-2 will surface
-  // the failure and we can fall back to a check-then-INSERT/UPDATE pattern.
+  // Check-then-write upsert on (user_id, month). The underlying unique
+  // constraint is partial — UNIQUE(user_id, month) WHERE deleted_at IS NULL
+  // — and supabase-js's .upsert() can't pass the WHERE predicate to ON
+  // CONFLICT, so a real .upsert() would 42P10 on first conflict. We do an
+  // explicit SELECT-then-UPDATE-or-INSERT instead (5C-2 ensureMonthlyEntriesExist
+  // uses the same pattern). Single-user single-device, so no race-window
+  // concerns.
   async function upsertSalaryRecord(payload) {
     try {
       const userId = await getUserId();
@@ -342,17 +344,47 @@
       if (!payload || !payload.monthKey) {
         return { success: false, error: 'upsertSalaryRecord requires monthKey' };
       }
-      const row = {
-        user_id:       userId,
-        month:         payload.monthKey,
+
+      // 1. Look up an existing active record for this user+month.
+      const { data: existing, error: selErr } = await client
+        .from('salary_records')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('month', payload.monthKey)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      if (selErr) return { success: false, error: friendlyError(selErr) };
+
+      const fields = {
         annual_gross:  payload.annualGross ?? 0,
         monthly_taxes: payload.monthlyTaxes ?? 0,
         salary_source: payload.salarySource || 'manual',
         updated_at:    new Date().toISOString(),
       };
+
+      if (existing && existing.id) {
+        // 2a. UPDATE the existing row.
+        const { data, error } = await client
+          .from('salary_records')
+          .update(fields)
+          .eq('id', existing.id)
+          .eq('user_id', userId)
+          .select()
+          .single();
+        if (error) return { success: false, error: friendlyError(error) };
+        return { success: true, data };
+      }
+
+      // 2b. INSERT a new row.
+      const insertRow = {
+        user_id: userId,
+        month:   payload.monthKey,
+        ...fields,
+      };
       const { data, error } = await client
         .from('salary_records')
-        .upsert(row, { onConflict: 'user_id,month' })
+        .insert(insertRow)
         .select()
         .single();
       if (error) return { success: false, error: friendlyError(error) };
@@ -371,6 +403,7 @@
         return { success: false, error: 'insertSalaryDeduction requires salaryRecordId' };
       }
       const row = {
+        id:               payload.id || undefined,  // client UUID precedent (see insertTransaction)
         salary_record_id: payload.salaryRecordId,
         user_id:          userId,
         name:             payload.name || '',
