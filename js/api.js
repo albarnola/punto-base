@@ -224,6 +224,122 @@
     }
   }
 
+  // Stage 5F-4: insert a salary_seed transaction. source_id references
+  // either salary_deductions.id (deduction-backed seed) or salary_records.id
+  // (take-home seed). The Stage 5A trigger recomputes monthly_entries.actual
+  // = SUM(amount) on insert.
+  async function insertSalarySeedTransaction(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!payload || !payload.monthly_entry_id) {
+        return { success: false, error: 'insertSalarySeedTransaction requires monthly_entry_id' };
+      }
+      const row = {
+        user_id:          userId,
+        monthly_entry_id: payload.monthly_entry_id,
+        amount:           payload.amount ?? 0,
+        description:      null,
+        transaction_date: null,
+        transaction_type: 'salary_seed',
+        source_id:        payload.source_id || null,
+      };
+      const { data, error } = await client
+        .from('transactions')
+        .insert(row)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  // Stage 5F-4: update an existing salary_seed transaction's amount in place.
+  // The cached txn id is the entry point — caller maintains the cache. The
+  // trigger recomputes monthly_entries.actual on UPDATE.
+  async function updateSalarySeedTransaction(transactionId, fields) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!transactionId) {
+        return { success: false, error: 'updateSalarySeedTransaction requires transactionId' };
+      }
+      const update = { updated_at: new Date().toISOString() };
+      if (fields && 'amount' in fields) update.amount = fields.amount;
+      const { data, error } = await client
+        .from('transactions')
+        .update(update)
+        .eq('id', transactionId)
+        .eq('user_id', userId)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  // Stage 5F-4: hard-delete a salary_seed transaction (transactions has no
+  // deleted_at column). Trigger fires on DELETE and recomputes
+  // monthly_entries.actual to exclude this row.
+  async function deleteSalarySeedTransaction(transactionId) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!transactionId) {
+        return { success: false, error: 'deleteSalarySeedTransaction requires transactionId' };
+      }
+      const { error } = await client
+        .from('transactions')
+        .delete()
+        .eq('id', transactionId)
+        .eq('user_id', userId);
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  // Stage 5F-4: boot hydration for the take-home salary_seed transaction
+  // ids. Returns [{ txn_id, month }]. Uses a nested inner-join to filter
+  // transactions whose parent monthly_entry's parent budget_category is the
+  // income Salary row.
+  async function listTakeHomeSalarySeeds() {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('transactions')
+        .select(`
+          id,
+          monthly_entries!inner(
+            month,
+            budget_categories!inner(section, name)
+          )
+        `)
+        .eq('user_id', userId)
+        .eq('transaction_type', 'salary_seed')
+        .eq('monthly_entries.budget_categories.section', 'income')
+        .eq('monthly_entries.budget_categories.name', 'Salary');
+      if (error) return { success: false, error: friendlyError(error) };
+      const rows = (data || []).map(r => ({
+        txn_id: r.id,
+        month:  r.monthly_entries && r.monthly_entries.month,
+      })).filter(r => r.month);
+      return { success: true, data: rows };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function insertMonthlyEntry(payload) {
     try {
       const userId = await getUserId();
@@ -555,6 +671,10 @@
     getTransactions,
     insertTransaction,
     deleteTransaction,
+    insertSalarySeedTransaction,
+    updateSalarySeedTransaction,
+    deleteSalarySeedTransaction,
+    listTakeHomeSalarySeeds,
     insertMonthlyEntry,
     updateMonthlyEntry,
     insertBudgetCategory,
