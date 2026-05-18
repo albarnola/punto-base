@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In · Punto Base</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/auth.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/auth.js"></script>
+</head>
+<body class="auth-body">
+
+  <!-- ===== HEADER ===== -->
+  <header role="banner">
+    <div class="header-inner">
+      <img src="assets/logo.png" alt="Punto Base" class="brand-logo" />
+    </div>
+  </header>
+
+  <!-- ===== MAIN ===== -->
+  <main class="auth-main" id="main-content">
+    <section class="auth-card" aria-labelledby="auth-heading">
+      <h1 id="auth-heading" class="auth-heading">Welcome to Punto Base</h1>
+      <p class="auth-subtitle">Sign in to access your budget</p>
+
+      <div class="auth-tabs" role="tablist" aria-label="Authentication">
+        <button
+          class="auth-tab auth-tab--active"
+          id="tab-signin"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="form-signin">Sign In</button>
+        <button
+          class="auth-tab"
+          id="tab-signup"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="form-signup">Sign Up</button>
+      </div>
+
+      <!-- Sign In -->
+      <form
+        class="auth-form"
+        id="form-signin"
+        role="tabpanel"
+        aria-labelledby="tab-signin"
+        novalidate>
+        <div class="auth-field">
+          <label for="signin-email">Email</label>
+          <input
+            type="email"
+            id="signin-email"
+            name="email"
+            autocomplete="email"
+            required />
+        </div>
+        <div class="auth-field">
+          <label for="signin-password">Password</label>
+          <input
+            type="password"
+            id="signin-password"
+            name="password"
+            autocomplete="current-password"
+            required />
+        </div>
+        <p class="auth-error" id="signin-error" role="alert" hidden></p>
+        <button type="submit" class="auth-submit" id="signin-submit">Sign In</button>
+        <a href="#" class="auth-link" id="forgot-password">Forgot password?</a>
+      </form>
+
+      <!-- Sign Up -->
+      <form
+        class="auth-form"
+        id="form-signup"
+        role="tabpanel"
+        aria-labelledby="tab-signup"
+        novalidate
+        hidden>
+        <div class="auth-field">
+          <label for="signup-email">Email</label>
+          <input
+            type="email"
+            id="signup-email"
+            name="email"
+            autocomplete="email"
+            required />
+        </div>
+        <div class="auth-field">
+          <label for="signup-password">Password</label>
+          <input
+            type="password"
+            id="signup-password"
+            name="password"
+            autocomplete="new-password"
+            minlength="8"
+            required />
+          <span class="auth-hint">At least 8 characters</span>
+        </div>
+        <p class="auth-error" id="signup-error" role="alert" hidden></p>
+        <p class="auth-info" id="signup-info" role="status" hidden></p>
+        <button type="submit" class="auth-submit" id="signup-submit">Create Account</button>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const tabSignin   = document.getElementById('tab-signin');
+      const tabSignup   = document.getElementById('tab-signup');
+      const formSignin  = document.getElementById('form-signin');
+      const formSignup  = document.getElementById('form-signup');
+      const signinError = document.getElementById('signin-error');
+      const signupError = document.getElementById('signup-error');
+      const signupInfo  = document.getElementById('signup-info');
+      const signinBtn   = document.getElementById('signin-submit');
+      const signupBtn   = document.getElementById('signup-submit');
+      const forgotLink  = document.getElementById('forgot-password');
+
+      function activateTab(which) {
+        const isSignin = which === 'signin';
+        tabSignin.classList.toggle('auth-tab--active', isSignin);
+        tabSignup.classList.toggle('auth-tab--active', !isSignin);
+        tabSignin.setAttribute('aria-selected', String(isSignin));
+        tabSignup.setAttribute('aria-selected', String(!isSignin));
+        formSignin.hidden = !isSignin;
+        formSignup.hidden = isSignin;
+        hideMessage(signinError);
+        hideMessage(signupError);
+        hideMessage(signupInfo);
+      }
+
+      function showMessage(el, text) {
+        el.textContent = text;
+        el.hidden = false;
+      }
+      function hideMessage(el) {
+        el.textContent = '';
+        el.hidden = true;
+      }
+
+      function setLoading(btn, loading, loadingText) {
+        if (loading) {
+          btn.dataset.originalText = btn.textContent;
+          btn.textContent = loadingText;
+          btn.disabled = true;
+        } else {
+          btn.textContent = btn.dataset.originalText || btn.textContent;
+          btn.disabled = false;
+        }
+      }
+
+      tabSignin.addEventListener('click', () => activateTab('signin'));
+      tabSignup.addEventListener('click', () => activateTab('signup'));
+
+      forgotLink.addEventListener('click', e => e.preventDefault());
+
+      formSignin.addEventListener('submit', async e => {
+        e.preventDefault();
+        hideMessage(signinError);
+        const email = document.getElementById('signin-email').value.trim();
+        const password = document.getElementById('signin-password').value;
+        if (!email || !password) {
+          showMessage(signinError, 'Please enter your email and password.');
+          return;
+        }
+        if (!window.puntoAuth) {
+          showMessage(signinError, 'Authentication is still loading. Please try again in a moment.');
+          return;
+        }
+        setLoading(signinBtn, true, 'Signing in...');
+        const result = await window.puntoAuth.signIn(email, password);
+        if (result.success) {
+          window.location.href = 'index.html#dashboard';
+        } else {
+          setLoading(signinBtn, false);
+          showMessage(signinError, result.error);
+        }
+      });
+
+      formSignup.addEventListener('submit', async e => {
+        e.preventDefault();
+        hideMessage(signupError);
+        hideMessage(signupInfo);
+        const email = document.getElementById('signup-email').value.trim();
+        const password = document.getElementById('signup-password').value;
+        if (!email || !password) {
+          showMessage(signupError, 'Please enter your email and password.');
+          return;
+        }
+        if (password.length < 8) {
+          showMessage(signupError, 'Password must be at least 8 characters.');
+          return;
+        }
+        if (!window.puntoAuth) {
+          showMessage(signupError, 'Authentication is still loading. Please try again in a moment.');
+          return;
+        }
+        setLoading(signupBtn, true, 'Creating account...');
+        const result = await window.puntoAuth.signUp(email, password);
+        if (result.success) {
+          if (result.session) {
+            window.location.href = 'index.html#dashboard';
+          } else if (result.needsEmailConfirmation) {
+            setLoading(signupBtn, false);
+            showMessage(signupInfo, 'Account created. Check your email to confirm, then sign in.');
+          } else {
+            window.location.href = 'index.html#dashboard';
+          }
+        } else {
+          setLoading(signupBtn, false);
+          showMessage(signupError, result.error);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

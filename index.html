@@ -12,6 +12,10 @@
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/api.js"></script>
 </head>
 <body>
 
@@ -25,6 +29,7 @@
           <line x1="3" y1="18" x2="21" y2="18"/>
         </svg>
       </button>
+      <div id="sync-indicator" class="sync-indicator sync-idle" aria-live="polite" aria-label="Sync status: idle"></div>
       <img src="assets/logo.png" alt="Punto Base" class="brand-logo" />
     </div>
   </header>
@@ -137,7 +142,7 @@
 
       <!-- Apply to future months -->
       <section class="salary-apply-future" aria-label="Apply this month forward">
-        <button class="btn-secondary" id="salary-apply-future-btn" type="button"></button>
+        <button class="btn-secondary btn--inactive" id="salary-apply-future-btn" type="button" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon."></button>
         <p class="salary-apply-note">Overwrites future months even if they've been manually edited.</p>
       </section>
 
@@ -442,15 +447,23 @@
 
         <section class="settings-section" aria-labelledby="settings-data-heading">
           <h3 id="settings-data-heading">Data</h3>
-          <button class="btn-secondary" id="copy-prev-month-btn"></button>
-          <button class="btn-secondary" id="apply-future-btn"></button>
-          <button class="btn-secondary" id="export-btn">Export JSON</button>
-          <button class="btn-secondary" id="reset-month-btn">Reset This Month</button>
-          <button class="btn-danger" id="clear-data-btn">Clear All Data</button>
+          <button class="btn-secondary btn--inactive" id="copy-prev-month-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon."></button>
+          <button class="btn-secondary btn--inactive" id="apply-future-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon."></button>
+          <button class="btn-secondary btn--inactive" id="export-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon.">Export JSON</button>
+          <button class="btn-secondary btn--inactive" id="reset-month-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon.">Reset This Month</button>
+          <button class="btn-danger btn--inactive" id="clear-data-btn" disabled aria-disabled="true" title="Disabled while we finish cloud sync. Coming soon.">Clear All Data</button>
         </section>
 
       </div>
     </section>
+
+    <!-- ===== LOADING OVERLAY (covers main while API loads) ===== -->
+    <div id="app-loading-overlay" class="loading-overlay" aria-hidden="true" hidden>
+      <div class="loading-overlay__content">
+        <div class="loading-overlay__spinner" aria-hidden="true"></div>
+        <p class="loading-overlay__text">Loading your data…</p>
+      </div>
+    </div>
 
   </main>
 

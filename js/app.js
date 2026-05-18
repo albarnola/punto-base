@@ -75,8 +75,38 @@ income:            'Income',
   const LS_KEY = 'puntobase_budget';
   let state        = null;
   let currentMonth = toMonthKey(new Date());
-  let saveTimer    = null;
   const expandedRows = new Set();
+
+  // Cache of Supabase categories from init's fetch, reused on month change
+  // to re-stamp row IDs.
+  let apiCategoriesCache = null;
+
+  // Stage 5F-3 (extended by 5F-4): bridge between syncBudgetWithSalary's
+  // synthesized linked rows (transient, render-time disposable) and the real
+  // server-side budget_categories rows backing them.
+  //
+  // Key: normalized deduction name. Value:
+  //   {
+  //     budgetCategoryId:       <uuid>,
+  //     monthlyEntryIdByMonth:  Map<monthKey, monthlyEntryId>,
+  //     actualByMonth:          Map<monthKey, number>,   // 5F-4: trigger-maintained
+  //     salarySeedTxnIdByMonth: Map<monthKey, txnId>,    // 5F-4: cached for update-in-place
+  //   }
+  //
+  // budget_categories is spanning (one row per user per name) but the
+  // monthly_entries / transactions / actual values are per-month, hence
+  // the nested Maps.
+  const linkedBudgetCategoryIds = new Map();
+
+  function normalizeDeductionName(name) {
+    return (name || '').trim().toLowerCase();
+  }
+
+  // Stage 5F-4 Part 4: cached salary_seed transaction id for the income
+  // Salary row, keyed by monthKey. Separate from linkedBudgetCategoryIds
+  // because the take-home seed is keyed on month (not on a deduction name)
+  // and its source_id references salary_records.id (not salary_deductions.id).
+  const takeHomeSalarySeedTxnIdByMonth = new Map();
 
   // Undo / redo
   const undoStack   = [];
@@ -102,8 +132,19 @@ income:            'Income',
     };
   }
 
-  function newTransaction(amount, date, note = '') {
-    return { id: crypto.randomUUID(), date, amount, note };
+  function newTransaction(amount, date, note = '', extras = {}) {
+    return {
+      id: crypto.randomUUID(),
+      date,
+      amount,
+      note,
+      // Stage 5 fields (populated by applier when reading from Supabase;
+      // defaults are fine for locally-created transactions until Stage 5C
+      // wires writes).
+      monthly_entry_id: extras.monthly_entry_id || null,
+      transaction_type: extras.transaction_type || 'manual',
+      source_id:        extras.source_id        || null,
+    };
   }
 
   function newAdjustment(amount = 0, note = '') {
@@ -286,9 +327,298 @@ income:            'Income',
     localStorage.setItem(LS_KEY, JSON.stringify(state));
   }
 
-  function debouncedSave() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveState, 250);
+  function debounce(fn, ms) {
+    let timer    = null;
+    let lastArgs = null;
+    let lastThis = null;
+
+    const debounced = function (...args) {
+      lastArgs = args;
+      lastThis = this;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        const a = lastArgs;
+        const t = lastThis;
+        lastArgs = null;
+        lastThis = null;
+        fn.apply(t, a);
+      }, ms);
+    };
+
+    // Force a pending invocation to fire NOW (synchronously). No-op if no
+    // call is pending. Used by flushSalaryEditSession + beforeunload to
+    // close the localStorage-vs-Supabase drift window.
+    debounced.flush = function () {
+      if (timer === null) return;
+      clearTimeout(timer);
+      timer = null;
+      if (lastArgs) {
+        const a = lastArgs;
+        const t = lastThis;
+        lastArgs = null;
+        lastThis = null;
+        fn.apply(t, a);
+      }
+    };
+
+    // Drop any pending invocation without firing it.
+    debounced.cancel = function () {
+      clearTimeout(timer);
+      timer    = null;
+      lastArgs = null;
+      lastThis = null;
+    };
+
+    return debounced;
+  }
+
+  const debouncedSave = debounce(saveState, 250);
+
+  // ============================================================
+  // SYNC INDICATOR (Stage 5C-3-1)
+  // ============================================================
+  // Sync indicator state machine.
+  // States: 'idle' (gray), 'pending' (amber), 'synced' (green, 1.5s
+  // then idle), 'error' (red, until retry queue drains).
+  let syncInFlight = 0;
+  let syncRetryQueueSize = 0;
+  let syncSyncedTimer = null;
+  let syncHasErrorSinceLastDrain = false;
+
+  function setSyncClass(cls) {
+    const el = document.getElementById('sync-indicator');
+    if (!el) return;
+    el.classList.remove('sync-idle', 'sync-pending', 'sync-synced', 'sync-error');
+    el.classList.add(cls);
+    el.setAttribute('aria-label', `Sync status: ${cls.replace('sync-', '')}`);
+  }
+
+  function recomputeSyncState() {
+    // Active work → pending (overrides everything else)
+    if (syncInFlight > 0 || syncRetryQueueSize > 0) {
+      if (syncSyncedTimer) { clearTimeout(syncSyncedTimer); syncSyncedTimer = null; }
+      setSyncClass(syncHasErrorSinceLastDrain ? 'sync-error' : 'sync-pending');
+      return;
+    }
+    // No active work + had an error → error sticks until next successful write
+    if (syncHasErrorSinceLastDrain) {
+      setSyncClass('sync-error');
+      return;
+    }
+    // No active work, no recent error → synced briefly, then idle
+    setSyncClass('sync-synced');
+    if (syncSyncedTimer) clearTimeout(syncSyncedTimer);
+    syncSyncedTimer = setTimeout(() => {
+      setSyncClass('sync-idle');
+      syncSyncedTimer = null;
+    }, 1500);
+  }
+
+  function syncBeginWrite() {
+    syncInFlight++;
+    recomputeSyncState();
+  }
+
+  function syncEndWriteSuccess() {
+    syncInFlight = Math.max(0, syncInFlight - 1);
+    syncHasErrorSinceLastDrain = false;  // success clears the error flag
+    recomputeSyncState();
+  }
+
+  function syncEndWriteFailure() {
+    syncInFlight = Math.max(0, syncInFlight - 1);
+    syncHasErrorSinceLastDrain = true;
+    recomputeSyncState();
+  }
+
+  // Network-error retry with exponential backoff: 1s, 2s, 4s, 8s.
+  // After 4 failed attempts, gives up and calls onFinalFailure.
+  // App-level errors (4xx-equivalent) — i.e., result.success === false
+  // with a non-network friendlyError — are NOT retried; onFinalFailure
+  // fires immediately. The distinction: network errors throw or yield
+  // success:false with no data; app errors yield success:false with a
+  // structured error. For v1 we treat ALL success:false as terminal
+  // (no retry). Anything that throws is a network error and IS retried.
+  //
+  // queueSize tracking lets the sync indicator reflect "something is
+  // pending in retry land."
+  const RETRY_DELAYS = [1000, 2000, 4000, 8000];
+
+  async function withRetry(apiCall, onFinalFailure) {
+    syncBeginWrite();
+    let attempt = 0;
+    while (true) {
+      try {
+        const result = await apiCall();
+        if (result && result.success) {
+          syncEndWriteSuccess();
+          return;
+        }
+        // success:false (app error) — no retry
+        syncEndWriteFailure();
+        onFinalFailure(result?.error || 'Write failed');
+        return;
+      } catch (err) {
+        // Network/throw — eligible for retry
+        if (attempt >= RETRY_DELAYS.length) {
+          syncEndWriteFailure();
+          onFinalFailure(err);
+          return;
+        }
+        syncRetryQueueSize++;
+        recomputeSyncState();
+        await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+        syncRetryQueueSize--;
+        attempt++;
+      }
+    }
+  }
+
+  // ============================================================
+  // EXPECTED-EDIT DEBOUNCE (Stage 5D)
+  // ============================================================
+  // Per-monthly_entry_id debounced flushers for Expected writes.
+  // Each row has its own 800ms timer so edits across rows don't coalesce.
+  const expectedFlushers = new Map();
+
+  function flushExpectedWrite(row, section, preEditExpected) {
+    // Re-read current expected at flush time — might have changed during the wait.
+    const currentExpected = row.expected;
+    withRetry(
+      () => window.puntoApi.updateMonthlyEntry({
+        id:       row.monthly_entry_id,
+        expected: currentExpected,
+      }),
+      (err) => {
+        console.warn('updateMonthlyEntry failure, reverting:', err);
+        row.expected = preEditExpected;
+        // Re-render the input value
+        const tr = document.querySelector(`tr[data-id="${row.id}"]`);
+        if (tr) {
+          const input = tr.querySelector('input[data-field="expected"]');
+          if (input) input.value = formatCurrency(preEditExpected);
+        }
+        // Repaint variance + summary
+        updateRowCells(row.id, section);
+        renderSummary();
+        debouncedSave();
+      }
+    );
+  }
+
+  function getExpectedFlusher(monthlyEntryId) {
+    let flusher = expectedFlushers.get(monthlyEntryId);
+    if (!flusher) {
+      flusher = debounce((row, section, capturedPreEditExpected) => {
+        flushExpectedWrite(row, section, capturedPreEditExpected);
+      }, 800);
+      expectedFlushers.set(monthlyEntryId, flusher);
+    }
+    return flusher;
+  }
+
+  // ── Name-field per-row debounced writer (Stage 5E) ────────────
+  // Mirrors the Expected pattern. section is threaded through closure so
+  // the revert path can look the row up via the existing findRow helper.
+  // Lifecycle (syncBeginWrite/Success/Failure) is handled inside withRetry,
+  // so we do NOT wrap manually.
+  const nameFlushers = new Map();
+
+  function flushNameWrite(rowId, section, newName, preEditName) {
+    withRetry(
+      () => window.puntoApi.updateBudgetCategory({ id: rowId, name: newName }),
+      (err) => {
+        console.warn(`Stage 5E: name write failed for row ${rowId}, reverting to "${preEditName}":`, err);
+        const row = findRow(section, rowId);
+        if (row) {
+          row.name = preEditName;
+          renderAll();
+          debouncedSave();
+        }
+      }
+    );
+  }
+
+  function getNameFlusher(rowId) {
+    let flusher = nameFlushers.get(rowId);
+    if (!flusher) {
+      flusher = debounce((section, newName, preEditName) => {
+        flushNameWrite(rowId, section, newName, preEditName);
+      }, 800);
+      nameFlushers.set(rowId, flusher);
+    }
+    return flusher;
+  }
+
+  // ── Salary-record debounced writer (Stage 5F-2) ───────────────
+  // One debouncer per month. Used by the gross / taxes inputs which
+  // mutate the salary_record row directly.
+  const salaryRecordFlushers = new Map();
+
+  function getSalaryRecordFlusher(monthKey) {
+    let flusher = salaryRecordFlushers.get(monthKey);
+    if (!flusher) {
+      flusher = debounce(async () => {
+        const rec = state.salaryData?.[monthKey];
+        if (!rec) return;
+        if (!window.puntoApi || typeof window.puntoApi.upsertSalaryRecord !== 'function') return;
+        const r = await window.puntoApi.upsertSalaryRecord({
+          monthKey,
+          annualGross:  parseAmount(rec.annualGross),
+          monthlyTaxes: parseAmount(rec.taxes),
+          salarySource: rec.salarySource || 'manual',
+        });
+        if (r && r.success && r.data) {
+          rec.id = r.data.id;
+        } else {
+          console.warn(`5F-2 dual-write failed at upsertSalaryRecord (${monthKey}):`,
+                       r && r.error);
+          return;
+        }
+        // Stage 5F-4 Part 4: refresh the take-home salary_seed transaction.
+        // Gross / taxes / deduction-amount edits all converge on this flusher
+        // (the deduction-field handler also calls getSalaryRecordFlusher for
+        // the salarySource flip), so this hook covers all three.
+        await upsertTakeHomeSalarySeed(monthKey);
+      }, 800);
+      salaryRecordFlushers.set(monthKey, flusher);
+    }
+    return flusher;
+  }
+
+  // ── Salary-deduction debounced writer (Stage 5F-2) ────────────
+  // One debouncer per deduction id. The deduction's id is the client
+  // UUID stamped by newDeduction + passed through to the DB on INSERT.
+  const salaryDeductionFlushers = new Map();
+
+  function getSalaryDeductionFlusher(deductionId) {
+    let flusher = salaryDeductionFlushers.get(deductionId);
+    if (!flusher) {
+      flusher = debounce(async (fields, ded, monthKey) => {
+        if (!window.puntoApi || typeof window.puntoApi.updateSalaryDeduction !== 'function') return;
+        const r = await window.puntoApi.updateSalaryDeduction(deductionId, fields);
+        if (!r || !r.success) {
+          console.warn(`5F-2 dual-write failed at updateSalaryDeduction (${deductionId}):`,
+                       r && r.error);
+        }
+        // Stage 5F-3: when name stabilizes (after the typing debounce),
+        // attempt to promote the deduction to a real budget_categories row
+        // for this month. Idempotent — no-op for empty names, no-op if
+        // already promoted (Map lookup hit). Fires for investment-type
+        // only (the helper guards on this).
+        // Stage 5F-4: AFTER promotion completes, also upsert the salary_seed
+        // transaction so monthly_entries.actual reflects the deduction amount.
+        // Order matters: promote populates the bridge Map's monthlyEntryIdByMonth,
+        // which upsertSalarySeedForDeduction reads.
+        if (ded && monthKey) {
+          await promoteDeductionToCategory(ded, monthKey);
+          await upsertSalarySeedForDeduction(ded, monthKey);
+        }
+      }, 800);
+      salaryDeductionFlushers.set(deductionId, flusher);
+    }
+    return flusher;
   }
 
   function ensureMonth(key) {
@@ -323,6 +653,644 @@ income:            'Income',
     state.salaryData[key] = priorKey
       ? cloneSalaryData(state.salaryData[priorKey], 'inherited')
       : defaultSalaryData();
+  }
+
+  // Map DB section names → in-memory category keys. The DB uses snake_case
+  // and treats `income` as just another section; the local model puts income
+  // at the top level and camelCases `pretax_investments`.
+  const API_SECTION_MAP = {
+    income:             'income',
+    fixed:              'fixed',
+    variable:           'variable',
+    recreational:       'recreational',
+    savings:            'savings',
+    pretax_investments: 'pretaxInvestments',
+  };
+
+  async function loadCategoriesFromApi() {
+    if (!window.puntoApi || typeof window.puntoApi.getCategories !== 'function') {
+      console.error('puntoApi.getCategories is not available');
+      return [];
+    }
+    const result = await window.puntoApi.getCategories();
+    if (!result || !result.success) {
+      console.error('Failed to load categories from Supabase:', result && result.error);
+      return [];
+    }
+    return result.data || [];
+  }
+
+  function applyApiCategoriesToMonth(rows, monthKey = currentMonth) {
+    const md = state.months[monthKey];
+    md.income = [];
+    md.categories = {
+      fixed:             [],
+      variable:          [],
+      recreational:      [],
+      savings:           [],
+      pretaxInvestments: [],
+    };
+    const sorted = (rows || []).slice().sort((a, b) =>
+      (a.sort_order ?? 0) - (b.sort_order ?? 0)
+    );
+    for (const cat of sorted) {
+      // Stage 5F-4 Part 1B: linked rows are synthesized at render time by
+      // syncBudgetWithSalary, not loaded into md.categories. Including them
+      // here would cause duplicates with the synthesized row. The server-
+      // side row's identity lives in linkedBudgetCategoryIds (the bridge
+      // Map); render code reads only the synthesized row.
+      if (cat.is_linked === true) continue;
+      const localSection = API_SECTION_MAP[cat.section];
+      if (!localSection) continue;
+      const row = newRow(cat.name || '', 0, cat.sort_order ?? 0);
+      row.id = cat.id;
+      // Stage 5F-1: propagate linked-row flags. Today nothing in the app
+      // writes is_linked=true, so existing data loads as false/null —
+      // matching prior behavior. 5F-3 will populate these for real.
+      row.isLinked         = cat.is_linked === true;
+      row.linkedDeductionId = cat.linked_deduction_id || null;
+      if (localSection === 'savings') {
+        row.subtype = SUBTYPES.includes(cat.subtype)
+          ? cat.subtype
+          : inferSubtype(cat.name);
+      }
+      if (localSection === 'income') md.income.push(row);
+      else md.categories[localSection].push(row);
+    }
+  }
+
+  async function loadMonthlyEntriesFromApi(monthKey) {
+    if (!window.puntoApi || typeof window.puntoApi.getMonthlyEntries !== 'function') {
+      console.warn('puntoApi.getMonthlyEntries is not available');
+      return [];
+    }
+    const result = await window.puntoApi.getMonthlyEntries(monthKey);
+    if (!result || !result.success) {
+      console.warn('Failed to load monthly entries from Supabase:', result && result.error);
+      return [];
+    }
+    return result.data || [];
+  }
+
+  // Apply monthly_entries rows from Supabase to the in-memory model for the
+  // given month. Each entry is matched to a row by entry.category_id ↔ row.id
+  // (which equals the Supabase category UUID for rows seeded from the API).
+  // Skips entries without a matching row — defensive against deleted categories.
+  function applyApiMonthlyEntriesToMonth(entries, monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const byId = new Map();
+    for (const row of md.income || []) byId.set(row.id, row);
+    for (const list of Object.values(md.categories || {})) {
+      for (const row of list || []) byId.set(row.id, row);
+    }
+    // Stage 5F-3: also build a reverse Map of budgetCategoryId → linkedEntry
+    // so we can populate monthlyEntryIdByMonth for entries belonging to
+    // linked (synthesized) rows whose in-memory id won't match category_id.
+    const linkedByCategoryId = new Map();
+    for (const linkedEntry of linkedBudgetCategoryIds.values()) {
+      if (linkedEntry && linkedEntry.budgetCategoryId) {
+        linkedByCategoryId.set(linkedEntry.budgetCategoryId, linkedEntry);
+      }
+    }
+    for (const entry of entries || []) {
+      const row = byId.get(entry.category_id);
+      if (row) {
+        row.expected = parseAmount(entry.expected);
+        row.actual   = parseAmount(entry.actual);
+        row.monthly_entry_id = entry.id;
+        continue;
+      }
+      // No in-memory row matched — check if this entry belongs to a linked
+      // budget_category we know about. If so, stash its monthly_entry_id
+      // AND its actual into the bridge Map. Stage 5F-4 Part 1C: actualByMonth
+      // is the source of truth for the synthesized row's Actual cell once
+      // Part 6 flips the read path.
+      const linkedEntry = linkedByCategoryId.get(entry.category_id);
+      if (linkedEntry) {
+        linkedEntry.monthlyEntryIdByMonth.set(monthKey, entry.id);
+        linkedEntry.actualByMonth.set(monthKey, parseAmount(entry.actual));
+      }
+    }
+  }
+
+  // Ensure every in-memory row for the given month has a monthly_entry_id.
+  // Categories with no monthly_entries row for this month get one inserted
+  // and the returned id stamped back. Common case is a no-op fast path.
+  // Best-effort: per-row failures are logged but don't throw — the writer in
+  // 5C-3 can handle a still-missing id as a fallback if needed.
+  async function ensureMonthlyEntriesExist(monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const allRows = [
+      ...(md.income || []),
+      ...Object.values(md.categories || {}).flatMap(l => l || []),
+    ];
+    const missing = allRows.filter(r => r.id && !r.monthly_entry_id);
+    if (missing.length === 0) return;
+    if (!window.puntoApi || typeof window.puntoApi.insertMonthlyEntry !== 'function') {
+      console.warn('puntoApi.insertMonthlyEntry is not available; skipping ensureMonthlyEntriesExist');
+      return;
+    }
+    const results = await Promise.all(missing.map(row =>
+      window.puntoApi.insertMonthlyEntry({
+        category_id: row.id,
+        month:       monthKey,
+        expected:    parseAmount(row.expected || 0),
+        actual:      parseAmount(row.actual   || 0),
+      })
+    ));
+    for (let i = 0; i < missing.length; i++) {
+      const row    = missing[i];
+      const result = results[i];
+      if (result && result.success && result.data && result.data.id) {
+        row.monthly_entry_id = result.data.id;
+      } else {
+        console.warn(`Failed to ensure monthly_entry for row "${row.name || row.id}":`,
+                     result && result.error);
+      }
+    }
+    saveState();
+  }
+
+  // ============================================================
+  // SALARY DUAL-WRITE (Stage 5F-2 + 5F-2.1 cleanup)
+  // ============================================================
+  // Make DB state for one month exactly match in-memory state. Idempotent:
+  // soft-deletes any existing salary_deductions for the salary_record
+  // BEFORE inserting the current set. Without the cleanup step, apply-
+  // forward to a previously-visited month would duplicate deductions —
+  // cloneSalaryData wipes salaryRecordId stamps, so old DB rows would
+  // accumulate alongside fresh inserts.
+  //
+  // Best-effort: localStorage is authoritative; failures are logged.
+  // Each deduction's client UUID is passed through to the INSERT so DOM
+  // data-deduction-id attributes stay valid through the round-trip.
+  // No caller today re-inserts deductions whose ids already exist in the
+  // DB — 5F-3+ would need to revisit this if that changes (PK collision
+  // risk on the freshly-inserted ids).
+  async function dualWriteSalaryMonthToApi(monthKey) {
+    const rec = state.salaryData?.[monthKey];
+    if (!rec) return;
+    if (!window.puntoApi || typeof window.puntoApi.upsertSalaryRecord !== 'function') {
+      console.warn('5F-2 dual-write skipped: puntoApi.upsertSalaryRecord unavailable');
+      return;
+    }
+    const recResult = await window.puntoApi.upsertSalaryRecord({
+      monthKey,
+      annualGross:  parseAmount(rec.annualGross),
+      monthlyTaxes: parseAmount(rec.taxes),
+      salarySource: rec.salarySource || 'manual',
+    });
+    if (!recResult || !recResult.success || !recResult.data) {
+      console.warn(`5F-2 dual-write failed at upsertSalaryRecord (${monthKey}):`,
+                   recResult && recResult.error);
+      return;
+    }
+    rec.id = recResult.data.id;
+    const recordId = recResult.data.id;
+
+    // Stage 5F-2.1: batch-soft-delete every existing deduction for this
+    // salary_record. One PATCH regardless of N. Initial-month case is a
+    // no-op (no existing rows match). Proceed even if cleanup fails —
+    // worst case is duplicates, which is recoverable; better than aborting
+    // the upsert and leaving the month with no deductions at all.
+    if (typeof window.puntoApi.softDeleteSalaryDeductionsForRecord === 'function') {
+      const cleanupResult = await window.puntoApi.softDeleteSalaryDeductionsForRecord(recordId);
+      if (!cleanupResult || !cleanupResult.success) {
+        console.warn(`5F-2.1 cleanup failed at softDeleteSalaryDeductionsForRecord (${monthKey}):`,
+                     cleanupResult && cleanupResult.error);
+      }
+    }
+
+    // Insert all current in-memory deductions as fresh DB rows. No longer
+    // filters by `!d.salaryRecordId` — the cleanup above means any prior
+    // DB state is gone, so we want to insert everything in-memory.
+    const deductions = rec.deductions || [];
+    if (deductions.length === 0) return;
+    const results = await Promise.all(deductions.map((d, idx) =>
+      window.puntoApi.insertSalaryDeduction({
+        id:             d.id,                  // pass client UUID
+        salaryRecordId: recordId,
+        name:           d.name,
+        amount:         parseAmount(d.amount),
+        deductionType:  d.type || 'investment',
+        sortOrder:      idx,
+      })
+    ));
+    for (let i = 0; i < deductions.length; i++) {
+      const d = deductions[i];
+      const r = results[i];
+      if (r && r.success && r.data && r.data.id) {
+        d.salaryRecordId = recordId;
+        // d.id stays the same (we passed it in)
+      } else {
+        console.warn(`5F-2.1 dual-write failed at insertSalaryDeduction (${d.name}):`,
+                     r && r.error);
+      }
+    }
+
+    // Stage 5F-3 (Part B): for each investment-type deduction, ensure a
+    // real budget_categories row exists (spanning across months — one per
+    // user per name) AND a monthly_entries row for THIS month. Idempotent.
+    // Parallel across deductions; per-deduction the helper is sequential
+    // (insertBudgetCategory → insertMonthlyEntry).
+    await Promise.all(
+      deductions.map(d => promoteDeductionToCategory(d, monthKey))
+    );
+    // Stage 5F-4 Part 3: write/update salary_seed transactions for each
+    // promoted deduction. Order matters — promote must complete first so
+    // monthlyEntryIdByMonth is populated. Parallel across deductions.
+    await Promise.all(
+      deductions.map(d => upsertSalarySeedForDeduction(d, monthKey))
+    );
+    // Stage 5F-4 Part 4: also seed the take-home salary_seed on the income
+    // Salary row for this month. No-op if the Salary row's monthly_entry_id
+    // isn't yet stamped (warn-and-skip inside the helper).
+    await upsertTakeHomeSalarySeed(monthKey);
+  }
+
+  // After applyApiSalaryToMonth runs, the in-memory record either has a
+  // .id (DB had a row) or doesn't (DB had nothing — applyApiSalaryToMonth
+  // early-returned, leaving the ensureSalaryMonth skeleton). In the latter
+  // case, fire the dual-write to push the skeleton up.
+  async function ensureSalaryRecordExists(monthKey) {
+    const rec = state.salaryData?.[monthKey];
+    if (!rec) return;
+    if (rec.id) return;  // DB already has it
+    await dualWriteSalaryMonthToApi(monthKey);
+  }
+
+  // ============================================================
+  // LINKED-CATEGORY PROMOTION (Stage 5F-3)
+  // ============================================================
+  // Boot-time: load every is_linked=true budget_category into the bridge
+  // Map. budget_categories is spanning (one row per user per name) so the
+  // hydration is independent of which month the user lands on. Without
+  // this, navigating to an unvisited month and adding a deduction whose
+  // name matches an existing-elsewhere linked category would create a
+  // duplicate budget_categories row.
+  async function hydrateLinkedBudgetCategoryIds() {
+    if (!window.puntoApi || typeof window.puntoApi.listLinkedBudgetCategories !== 'function') {
+      console.warn('5F-3 hydration skipped: puntoApi.listLinkedBudgetCategories unavailable');
+      return;
+    }
+    const result = await window.puntoApi.listLinkedBudgetCategories();
+    if (!result || !result.success) {
+      console.warn('5F-3 hydration failed at listLinkedBudgetCategories:', result && result.error);
+      return;
+    }
+    for (const row of (result.data || [])) {
+      const key = normalizeDeductionName(row.name);
+      if (!key) continue;
+      if (!linkedBudgetCategoryIds.has(key)) {
+        linkedBudgetCategoryIds.set(key, {
+          budgetCategoryId:       row.id,
+          monthlyEntryIdByMonth:  new Map(),
+          actualByMonth:          new Map(),
+          salarySeedTxnIdByMonth: new Map(),
+        });
+      }
+    }
+  }
+
+  // Promote an investment-type salary deduction to a real budget_categories
+  // row (if not already present) AND ensure a monthly_entries row exists
+  // for the given month. Idempotent: safe to call repeatedly. Updates
+  // linkedBudgetCategoryIds in place. Best-effort: failures are logged.
+  //
+  // Does NOT touch the synthesized row in md.categories.pretaxInvestments.
+  // The synthesized row keeps its disposable client UUID forever; this
+  // helper produces the parallel server-side identity that 5F-4 will use
+  // to write salary_seed transactions.
+  async function promoteDeductionToCategory(deduction, monthKey) {
+    if (!deduction) return;
+    if ((deduction.type || 'investment') !== 'investment') return; // expense-type stays Salary-only
+    const name = (deduction.name || '').trim();
+    if (!name) return;  // empty name — wait for the user to type something
+    const key = normalizeDeductionName(name);
+    if (!window.puntoApi) return;
+
+    let entry = linkedBudgetCategoryIds.get(key);
+
+    if (!entry) {
+      // No existing budget_category for this name — INSERT one.
+      if (typeof window.puntoApi.insertBudgetCategory !== 'function') return;
+      // Compute sort_order from the current month's pretaxInvestments list
+      // so the new row sits at the end of that section visually. Other
+      // months' lists may have different lengths; this is best-effort.
+      const md = state.months?.[monthKey];
+      const list = md?.categories?.pretaxInvestments || [];
+      const nextOrder = list.reduce((m, r) => Math.max(m, r.order ?? 0), -1) + 1;
+      const result = await window.puntoApi.insertBudgetCategory({
+        name,
+        section:             'pretaxInvestments',
+        subtype:             null,
+        sort_order:          nextOrder,
+        is_linked:           true,
+        linked_deduction_id: null,  // see architectural note in 5F-3 prompt
+      });
+      if (!result || !result.success || !result.data || !result.data.id) {
+        console.error('5F-3 promote failed at insertBudgetCategory for deduction:',
+                      deduction.id, name, result && result.error);
+        return;
+      }
+      entry = {
+        budgetCategoryId:       result.data.id,
+        monthlyEntryIdByMonth:  new Map(),
+        actualByMonth:          new Map(),
+        salarySeedTxnIdByMonth: new Map(),
+      };
+      linkedBudgetCategoryIds.set(key, entry);
+    }
+
+    // Ensure a monthly_entries row for this month. Skip if we already
+    // tracked one (from boot hydration or a prior call).
+    if (entry.monthlyEntryIdByMonth.has(monthKey)) return;
+    if (typeof window.puntoApi.insertMonthlyEntry !== 'function') return;
+    const meResult = await window.puntoApi.insertMonthlyEntry({
+      category_id: entry.budgetCategoryId,
+      month:       monthKey,
+      expected:    0,
+      actual:      0,
+    });
+    if (meResult && meResult.success && meResult.data && meResult.data.id) {
+      entry.monthlyEntryIdByMonth.set(monthKey, meResult.data.id);
+    } else {
+      console.warn(`5F-3 promote: monthly_entries insert failed for "${name}" / ${monthKey}:`,
+                   meResult && meResult.error);
+    }
+  }
+
+  // Stage 5F-4 Part 3: ensure there's a salary_seed transaction for this
+  // (deduction, month) with the right amount. Update-in-place model: first
+  // call inserts and caches the txn id in salarySeedTxnIdByMonth; subsequent
+  // calls UPDATE the cached row. Optimistically updates actualByMonth so the
+  // next render reflects the new value without a round-trip.
+  //
+  // Requires promoteDeductionToCategory to have run first (the bridge entry
+  // and its monthlyEntryIdByMonth must be populated). Investment-type only.
+  async function upsertSalarySeedForDeduction(deduction, monthKey) {
+    if (!deduction || !monthKey) return;
+    if ((deduction.type || 'investment') !== 'investment') return;
+    const name = (deduction.name || '').trim();
+    if (!name) return;
+    if (!window.puntoApi) return;
+    const key = normalizeDeductionName(name);
+    const entry = linkedBudgetCategoryIds.get(key);
+    if (!entry) {
+      console.warn(`5F-4 upsertSalarySeed: no bridge entry for "${name}"`);
+      return;
+    }
+    const monthlyEntryId = entry.monthlyEntryIdByMonth.get(monthKey);
+    if (!monthlyEntryId) {
+      console.warn(`5F-4 upsertSalarySeed: no monthly_entry for "${name}" / ${monthKey}`);
+      return;
+    }
+    const amount = parseAmount(deduction.amount);
+    const cachedTxnId = entry.salarySeedTxnIdByMonth.get(monthKey);
+
+    if (cachedTxnId) {
+      if (typeof window.puntoApi.updateSalarySeedTransaction !== 'function') return;
+      const r = await window.puntoApi.updateSalarySeedTransaction(cachedTxnId, { amount });
+      if (!r || !r.success) {
+        console.warn(`5F-4 updateSalarySeed failed for "${name}" / ${monthKey}:`,
+                     r && r.error);
+      }
+    } else {
+      if (typeof window.puntoApi.insertSalarySeedTransaction !== 'function') return;
+      const r = await window.puntoApi.insertSalarySeedTransaction({
+        monthly_entry_id: monthlyEntryId,
+        amount,
+        source_id:        deduction.id,
+      });
+      if (r && r.success && r.data && r.data.id) {
+        entry.salarySeedTxnIdByMonth.set(monthKey, r.data.id);
+      } else {
+        console.warn(`5F-4 insertSalarySeed failed for "${name}" / ${monthKey}:`,
+                     r && r.error);
+      }
+    }
+
+    // Optimistic update — render reflects new amount without waiting for
+    // the next applyApiMonthlyEntriesToMonth round-trip.
+    entry.actualByMonth.set(monthKey, amount);
+  }
+
+  // Stage 5F-4 Part 4: ensure there's a salary_seed transaction on the
+  // income Salary row for this month, amount = computeTakeHome(rec). Same
+  // update-in-place model as the deduction seed. The Salary row's
+  // monthly_entry_id must already be stamped (5C-2 precreate); if missing
+  // we warn-and-skip. source_id references salary_records.id (so
+  // listTakeHomeSalarySeeds can be distinguished from deduction seeds via
+  // the join on budget_categories.section='income').
+  async function upsertTakeHomeSalarySeed(monthKey) {
+    if (!monthKey) return;
+    if (!window.puntoApi) return;
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const salaryRow = (md.income || []).find(r =>
+      (r.name || '').trim().toLowerCase() === 'salary'
+    );
+    if (!salaryRow || !salaryRow.monthly_entry_id) {
+      console.warn(`5F-4 take-home: no monthly_entry_id for Salary row in ${monthKey}`);
+      return;
+    }
+    const rec = state.salaryData?.[monthKey];
+    if (!rec || !rec.id) return;
+    const amount = parseAmount(computeTakeHome(rec));
+    const cachedTxnId = takeHomeSalarySeedTxnIdByMonth.get(monthKey);
+
+    if (cachedTxnId) {
+      if (typeof window.puntoApi.updateSalarySeedTransaction !== 'function') return;
+      const r = await window.puntoApi.updateSalarySeedTransaction(cachedTxnId, { amount });
+      if (!r || !r.success) {
+        console.warn(`5F-4 updateTakeHome failed for ${monthKey}:`, r && r.error);
+      }
+    } else {
+      if (typeof window.puntoApi.insertSalarySeedTransaction !== 'function') return;
+      const r = await window.puntoApi.insertSalarySeedTransaction({
+        monthly_entry_id: salaryRow.monthly_entry_id,
+        amount,
+        source_id:        rec.id,
+      });
+      if (r && r.success && r.data && r.data.id) {
+        takeHomeSalarySeedTxnIdByMonth.set(monthKey, r.data.id);
+      } else {
+        console.warn(`5F-4 insertTakeHome failed for ${monthKey}:`, r && r.error);
+      }
+    }
+
+    // Optimistic update — render reflects new take-home immediately.
+    salaryRow.actual = amount;
+  }
+
+  async function hydrateTakeHomeSalarySeedIds() {
+    if (!window.puntoApi || typeof window.puntoApi.listTakeHomeSalarySeeds !== 'function') {
+      console.warn('5F-4 hydration skipped: puntoApi.listTakeHomeSalarySeeds unavailable');
+      return;
+    }
+    const result = await window.puntoApi.listTakeHomeSalarySeeds();
+    if (!result || !result.success || !Array.isArray(result.data)) {
+      console.warn('5F-4 hydration failed at listTakeHomeSalarySeeds:', result && result.error);
+      return;
+    }
+    for (const row of result.data) {
+      if (row && row.month && row.txn_id) {
+        takeHomeSalarySeedTxnIdByMonth.set(row.month, row.txn_id);
+      }
+    }
+  }
+
+  // Two sequential API calls: salary_records (one row per user per month, may
+  // be null for new users) and — only when a record exists — its deductions.
+  // Returns { record, deductions } in raw snake_case shape; the applier maps
+  // field names (monthly_taxes → taxes, deduction_type → type).
+  async function loadSalaryFromApi(monthKey) {
+    if (!window.puntoApi || typeof window.puntoApi.getSalaryRecord !== 'function') {
+      console.warn('puntoApi.getSalaryRecord is not available');
+      return { record: null, deductions: [] };
+    }
+    const recResult = await window.puntoApi.getSalaryRecord(monthKey);
+    if (!recResult || !recResult.success) {
+      console.warn('Failed to load salary record from Supabase:', recResult && recResult.error);
+      return { record: null, deductions: [] };
+    }
+    const record = recResult.data;
+    if (!record) return { record: null, deductions: [] };
+    if (typeof window.puntoApi.getSalaryDeductions !== 'function') {
+      console.warn('puntoApi.getSalaryDeductions is not available');
+      return { record, deductions: [] };
+    }
+    const dedResult = await window.puntoApi.getSalaryDeductions(record.id);
+    if (!dedResult || !dedResult.success) {
+      console.warn('Failed to load salary deductions from Supabase:', dedResult && dedResult.error);
+      return { record, deductions: [] };
+    }
+    return { record, deductions: dedResult.data || [] };
+  }
+
+  // Replace state.salaryData[monthKey] with a freshly-built record from the
+  // API. When record is null, leave the existing (defaultSalaryData) skeleton
+  // alone so the renderer keeps working for new users.
+  function applyApiSalaryToMonth({ record, deductions }, monthKey) {
+    if (!record) return;
+    if (!state.salaryData) state.salaryData = {};
+    state.salaryData[monthKey] = {
+      id:           record.id,
+      annualGross:  parseAmount(record.annual_gross),
+      taxes:        parseAmount(record.monthly_taxes),
+      salarySource: record.salary_source,
+      deductions: (deductions || []).map(d => ({
+        id:             d.id,
+        salaryRecordId: record.id,
+        name:           d.name,
+        amount:         parseAmount(d.amount),
+        type:           d.deduction_type,
+      })),
+    };
+  }
+
+  async function loadAdjustmentsFromApi(monthKey) {
+    if (!window.puntoApi || typeof window.puntoApi.getAdjustments !== 'function') {
+      console.warn('puntoApi.getAdjustments is not available');
+      return [];
+    }
+    const result = await window.puntoApi.getAdjustments(monthKey);
+    if (!result || !result.success) {
+      console.warn('Failed to load adjustments from Supabase:', result && result.error);
+      return [];
+    }
+    return result.data || [];
+  }
+
+  // Replace each row's adjustments[] with the API's adjustments for that
+  // category, routed via entry.category_id ↔ row.id. Drops category_id and
+  // month from the stored shape — the row owns the linkage by containment,
+  // and the per-month state already scopes by month. Idempotent: every row
+  // gets a fresh array (or [] if there are no matching adjustments).
+  function applyApiAdjustmentsToMonth(adjustments, monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const byCategoryId = new Map();
+    for (const a of adjustments || []) {
+      const slim = { id: a.id, amount: parseAmount(a.amount), note: a.note };
+      const list = byCategoryId.get(a.category_id);
+      if (list) list.push(slim);
+      else byCategoryId.set(a.category_id, [slim]);
+    }
+    const allRows = [
+      ...(md.income || []),
+      ...Object.values(md.categories || {}).flatMap(l => l || []),
+    ];
+    for (const row of allRows) {
+      row.adjustments = byCategoryId.get(row.id) || [];
+    }
+  }
+
+  async function loadTransactionsFromApi(monthKey) {
+    if (!window.puntoApi || typeof window.puntoApi.getTransactions !== 'function') {
+      console.warn('puntoApi.getTransactions is not available');
+      return [];
+    }
+    const result = await window.puntoApi.getTransactions(monthKey);
+    if (!result || !result.success) {
+      console.warn('Failed to load transactions from Supabase:', result && result.error);
+      return [];
+    }
+    return result.data || [];
+  }
+
+  // Replace each row's transactions[] with the API's transactions for that
+  // category. Transactions FK to monthly_entries.id, but in-memory rows are
+  // keyed by budget_categories.id (row.id), so we bridge via the joined
+  // monthly_entries.category_id selected in the loader. Idempotent: every
+  // row gets a fresh array (or [] if there are no matching transactions).
+  function applyApiTransactionsToMonth(apiTransactions, monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    const byCategoryId = new Map();
+    for (const txn of apiTransactions || []) {
+      const parent = txn.monthly_entries;
+      const categoryId = parent && parent.category_id;
+      if (!categoryId) continue;
+      const list = byCategoryId.get(categoryId);
+      if (list) list.push(txn);
+      else byCategoryId.set(categoryId, [txn]);
+    }
+    const allRows = [
+      ...(md.income || []),
+      ...Object.values(md.categories || {}).flatMap(l => l || []),
+    ];
+    for (const row of allRows) {
+      if (!row.id) continue;
+      const dbTxns = byCategoryId.get(row.id) || [];
+      row.transactions = dbTxns.map(t => ({
+        id:               t.id,
+        date:             t.transaction_date || '',
+        amount:           parseAmount(t.amount),
+        note:             t.description || '',
+        monthly_entry_id: t.monthly_entry_id,
+        transaction_type: t.transaction_type || 'manual',
+        source_id:        t.source_id || null,
+      }));
+    }
+  }
+
+  function showLoadingOverlay() {
+    const el = document.getElementById('app-loading-overlay');
+    if (el) {
+      el.hidden = false;
+      el.setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function hideLoadingOverlay() {
+    const el = document.getElementById('app-loading-overlay');
+    if (el) {
+      el.hidden = true;
+      el.setAttribute('aria-hidden', 'true');
+    }
   }
 
   // ============================================================
@@ -370,11 +1338,29 @@ income:            'Income',
     return (row.adjustments || []).reduce((acc, a) => acc + parseAmount(a.amount), 0);
   }
 
-  // Linked savings/fixed rows: Actual = linked Expected (from Salary) + sum of adjustments.
-  // All other rows (including the linked income row): Actual = sum of transactions.
+  // Linked savings/fixed rows: Actual = row.actual (DB-trigger-computed from
+  // salary_seed transactions) + sum of adjustments, with fallback to the
+  // legacy linked-expected compute when row.actual isn't yet hydrated.
+  // All other rows (including the linked income row): prefer row.actual
+  // when set by the API; otherwise fall back to summing the row's
+  // transactions.
   function getActual(row, section, monthKey = currentMonth) {
     if (isLinkedAdjustableRow(row, section, monthKey)) {
+      // Stage 5F-4 Part 6: prefer DB-trigger-computed row.actual (which sums
+      // the salary_seed transaction). Adjustments still live in row.adjustments
+      // (separate from the transactions table — Stage 5G migrates them), so
+      // they need to be added on top.
+      // Fallback when row.actual isn't populated yet: legacy compute via
+      // getLinkedExpected. This covers (a) initial render before the
+      // applier runs, (b) rows that haven't been promoted yet, (c) post-5H
+      // migration data.
+      if (typeof row.actual === 'number' && !isNaN(row.actual)) {
+        return parseAmount(row.actual) + sumAdjustments(row);
+      }
       return getLinkedExpected(row, section, monthKey) + sumAdjustments(row);
+    }
+    if (typeof row.actual === 'number' && !isNaN(row.actual)) {
+      return parseAmount(row.actual);
     }
     return sumTransactions(row);
   }
@@ -391,7 +1377,12 @@ income:            'Income',
   }
 
   function sumListActual(list) {
-    return list.reduce((acc, r) => acc + sumTransactions(r), 0);
+    return list.reduce((acc, r) => {
+      if (typeof r.actual === 'number' && !isNaN(r.actual)) {
+        return acc + parseAmount(r.actual);
+      }
+      return acc + sumTransactions(r);
+    }, 0);
   }
 
   function computeSummary(monthData, monthKey = currentMonth) {
@@ -422,8 +1413,14 @@ income:            'Income',
     const savAct          = sumListActual(savRows);
 
     // SAVINGS / INVESTMENTS subtype-based actual sums (Savings & Investments).
-    const savingsBySubtype = (subtype) => savRows.reduce((acc, r) =>
-      acc + (getRowSubtype(r, 'savings', monthKey) === subtype ? sumTransactions(r) : 0), 0);
+    // Per-row, prefer row.actual when set by the API; otherwise sum transactions.
+    const savingsBySubtype = (subtype) => savRows.reduce((acc, r) => {
+      if (getRowSubtype(r, 'savings', monthKey) !== subtype) return acc;
+      if (typeof r.actual === 'number' && !isNaN(r.actual)) {
+        return acc + parseAmount(r.actual);
+      }
+      return acc + sumTransactions(r);
+    }, 0);
     const savingsActSubtype     = savingsBySubtype('savings');
     const investmentsActSubtype = savingsBySubtype('investment');
 
@@ -578,10 +1575,10 @@ income:            'Income',
     relocateOut(md.categories.savings);
     relocateOut(md.categories.fixed);
 
-    syncSectionWithDeductions(md.categories.pretaxInvestments, investmentDeductions);
+    syncSectionWithDeductions(md.categories.pretaxInvestments, investmentDeductions, monthKey);
   }
 
-  function syncSectionWithDeductions(list, deductions) {
+  function syncSectionWithDeductions(list, deductions, monthKey = currentMonth) {
     const dedNames = new Set(deductions.map(d => (d.name || '').trim()));
 
     // Remove orphaned linked rows (flag set, no matching deduction in this section).
@@ -592,6 +1589,20 @@ income:            'Income',
       }
     }
 
+    // Stage 5F-4 Part 1D: helper to stamp row.actual + row.monthly_entry_id
+    // from the bridge Map. Called for both newly-synthesized rows and existing
+    // rows being re-flagged on re-render. Without this, the synthesized row's
+    // Actual stays at undefined and getActual's row.actual branch (post-Part 6)
+    // can't fire.
+    const hydrateFromBridge = (row, dedName) => {
+      const bridgeEntry = linkedBudgetCategoryIds.get(normalizeDeductionName(dedName));
+      if (!bridgeEntry) return;
+      const actual = bridgeEntry.actualByMonth.get(monthKey);
+      if (typeof actual === 'number') row.actual = actual;
+      const entryId = bridgeEntry.monthlyEntryIdByMonth.get(monthKey);
+      if (entryId) row.monthly_entry_id = entryId;
+    };
+
     // Ensure every deduction has a matching row in this section; flag matches as linked.
     for (const ded of deductions) {
       const dedName = (ded.name || '').trim();
@@ -600,9 +1611,12 @@ income:            'Income',
         const nextOrder = list.reduce((m, r) => Math.max(m, r.order ?? 0), -1) + 1;
         const newR = newRow(ded.name, parseAmount(ded.amount), nextOrder);
         newR.linkedToSalary = true;
+        hydrateFromBridge(newR, dedName);
         list.push(newR);
-      } else if (!existing.linkedToSalary) {
-        existing.linkedToSalary = true;
+      } else {
+        if (!existing.linkedToSalary) existing.linkedToSalary = true;
+        // Re-hydrate every render so mid-session promotions reach the row.
+        hydrateFromBridge(existing, dedName);
       }
     }
   }
@@ -1322,6 +2336,13 @@ income:            'Income',
 
     pushUndo(`reorder '${nameA}'`);
 
+    // Stage 5E: capture pre-swap orders BEFORE the tempOrder dance so the
+    // revert path can restore the original values if the Supabase write fails.
+    const preSwapOrderA = rowA.order ?? idx;
+    const preSwapOrderB = rowB.order ?? swapIdx;
+    const rowAId        = rowA.id;
+    const rowBId        = rowB.id;
+
     // Swap orders in the viewed month
     const tempOrder = rowA.order ?? idx;
     rowA.order      = rowB.order ?? swapIdx;
@@ -1348,6 +2369,34 @@ income:            'Income',
 
     renderAll();
     debouncedSave();
+
+    // Stage 5E: write the swap to Supabase. Two parallel UPDATEs via Promise.all
+    // wrapped in withRetry's apiCall so a single retry covers both. The
+    // forward-propagation to future months is a localStorage-era artifact;
+    // sort_order is global per category on the server, so server-side there's
+    // nothing to propagate. Any local divergence in future months self-heals
+    // on next page load.
+    withRetry(
+      async () => {
+        const [resA, resB] = await Promise.all([
+          window.puntoApi.updateBudgetCategory({ id: rowAId, sort_order: rowA.order }),
+          window.puntoApi.updateBudgetCategory({ id: rowBId, sort_order: rowB.order }),
+        ]);
+        if (!resA.success || !resB.success) {
+          return { success: false, error: (resA.error || resB.error || 'partial reorder failure') };
+        }
+        return { success: true };
+      },
+      (err) => {
+        console.warn(`Stage 5E: reorder write failed for rows ${rowAId}, ${rowBId}, reverting:`, err);
+        const rA = findRow(section, rowAId);
+        const rB = findRow(section, rowBId);
+        if (rA) rA.order = preSwapOrderA;
+        if (rB) rB.order = preSwapOrderB;
+        renderAll();
+        debouncedSave();
+      }
+    );
   }
 
   // ============================================================
@@ -1367,6 +2416,45 @@ income:            'Income',
 
     const txn = newTransaction(amount, dateInput.value || getDefaultDate(), noteInput.value.trim());
     row.transactions.push(txn);
+
+    // Optimistic Supabase write (5C-3-1).
+    if (!row.monthly_entry_id) {
+      console.warn(
+        `addTransaction: row "${row.name}" has no monthly_entry_id; ` +
+        `skipping Supabase write. Stage 5E/5F will fix.`
+      );
+    } else {
+      const capturedRow     = row;
+      const capturedTxn     = txn;
+      const capturedRowId   = rowId;
+      const capturedSection = section;
+      withRetry(
+        () => window.puntoApi.insertTransaction({
+          id:               capturedTxn.id,
+          monthly_entry_id: capturedRow.monthly_entry_id,
+          amount:           capturedTxn.amount,
+          description:      capturedTxn.note || null,
+          transaction_date: capturedTxn.date || null,
+          transaction_type: 'manual',
+        }),
+        (err) => {
+          console.warn('addTransaction Supabase failure, reverting:', err);
+          const idx = capturedRow.transactions.findIndex(t => t.id === capturedTxn.id);
+          if (idx !== -1) {
+            capturedRow.transactions.splice(idx, 1);
+            const list = document.getElementById(`txn-list-${capturedRowId}`);
+            const itemEl = list?.querySelector(`[data-txn-id="${capturedTxn.id}"]`);
+            itemEl?.remove();
+            if (list && capturedRow.transactions.length === 0) {
+              list.appendChild(el('p', { className: 'txn-empty', textContent: T('noTransactions') }));
+            }
+            updateRowCells(capturedRowId, capturedSection);
+            renderSummary();
+            debouncedSave();
+          }
+        }
+      );
+    }
 
     const list = document.getElementById(`txn-list-${rowId}`);
     if (list) {
@@ -1389,8 +2477,43 @@ income:            'Income',
     const idx = row.transactions.findIndex(t => t.id === txnId);
     if (idx === -1) return;
     pushUndo(`edit to ${row.name}`);
-    row.transactions.splice(idx, 1);
+    const removedTxn = row.transactions.splice(idx, 1)[0];
     itemEl.remove();
+
+    // Optimistic Supabase write (5C-3-1).
+    if (!row.monthly_entry_id) {
+      console.warn(
+        `removeTransaction: row "${row.name}" has no monthly_entry_id; ` +
+        `skipping Supabase write.`
+      );
+    } else {
+      const capturedRow     = row;
+      const capturedTxn     = removedTxn;
+      const capturedIdx     = idx;
+      const capturedRowId   = rowId;
+      const capturedSection = section;
+      withRetry(
+        () => window.puntoApi.deleteTransaction(capturedTxn.id),
+        (err) => {
+          console.warn('removeTransaction Supabase failure, reverting:', err);
+          capturedRow.transactions.splice(capturedIdx, 0, capturedTxn);
+          const list = document.getElementById(`txn-list-${capturedRowId}`);
+          if (list) {
+            list.querySelector('.txn-empty')?.remove();
+            const restoredEl = renderTransactionItem(capturedTxn, capturedRowId, capturedSection);
+            const siblings = list.querySelectorAll('[data-txn-id]');
+            if (siblings[capturedIdx]) {
+              list.insertBefore(restoredEl, siblings[capturedIdx]);
+            } else {
+              list.appendChild(restoredEl);
+            }
+            updateRowCells(capturedRowId, capturedSection);
+            renderSummary();
+            debouncedSave();
+          }
+        }
+      );
+    }
 
     const list = document.getElementById(`txn-list-${rowId}`);
     if (list && row.transactions.length === 0) {
@@ -1402,7 +2525,7 @@ income:            'Income',
     debouncedSave();
   }
 
-  function addAdjustment(rowId, section, form) {
+  async function addAdjustment(rowId, section, form) {
     const amountInput = form.querySelector('.adj-input-amount');
     const noteInput   = form.querySelector('.adj-input-note');
 
@@ -1430,9 +2553,29 @@ income:            'Income',
     updateRowCells(rowId, section);
     renderSummary();
     debouncedSave();
+
+    // Stage 5G: dual-write to Supabase. Warn-on-failure pattern (matches
+    // 5F-2). localStorage stays authoritative; failures will reconcile when
+    // applyApiAdjustmentsToMonth overwrites row.adjustments on next reload —
+    // a failed-write adjustment is lost from the user's perspective. Same
+    // drift trade-off as 5F-2's tab-close-during-debounce. row.id is the
+    // budget_categories.id post-5F-3/4 (synthesized rows have the budget
+    // category UUID stamped by the bridge Map).
+    if (window.puntoApi && typeof window.puntoApi.insertAdjustment === 'function') {
+      const result = await window.puntoApi.insertAdjustment({
+        id:          adj.id,
+        category_id: row.id,
+        month:       currentMonth,
+        amount:      adj.amount,
+        note:        adj.note,
+      });
+      if (!result || !result.success) {
+        console.warn('5G: insertAdjustment failed:', result && result.error);
+      }
+    }
   }
 
-  function removeAdjustment(rowId, section, adjId, itemEl) {
+  async function removeAdjustment(rowId, section, adjId, itemEl) {
     const row = findRow(section, rowId);
     if (!row) return;
     const adjustments = row.adjustments || [];
@@ -1450,6 +2593,18 @@ income:            'Income',
     updateRowCells(rowId, section);
     renderSummary();
     debouncedSave();
+
+    // Stage 5G: dual-write soft-delete. Same warn-on-failure pattern as
+    // addAdjustment. localStorage is authoritative; a failed soft-delete
+    // leaves the row deleted-in-memory but still present in the DB until
+    // next reload's applyApiAdjustmentsToMonth overwrites (which would
+    // RE-ADD it from the DB). Same drift class as 5F-2.
+    if (window.puntoApi && typeof window.puntoApi.softDeleteAdjustment === 'function') {
+      const result = await window.puntoApi.softDeleteAdjustment(adjId);
+      if (!result || !result.success) {
+        console.warn('5G: softDeleteAdjustment failed:', result && result.error);
+      }
+    }
   }
 
   // ============================================================
@@ -1466,8 +2621,15 @@ income:            'Income',
     if (!row) return;
 
     if (field === 'name') {
+      // Stage 5E: write to budget_categories via debounced flusher
+      const preEditName = row.name;  // capture BEFORE mutation
       row.name = e.target.value;
+      if (row.id) {
+        const flusher = getNameFlusher(row.id);
+        flusher(section, row.name, preEditName);
+      }
     } else if (field === 'expected') {
+      const preEditExpected = row.expected;
       row.expected = parseAmount(e.target.value);
       const actual  = getActual(row, section);
       const { text: varianceText, className: varianceClass } = formatVariance(getEffectiveExpected(row, section), actual, section);
@@ -1477,9 +2639,32 @@ income:            'Income',
         varTd.className   = varianceClass;
       }
       renderSummary();
+      // Stage 5D: Supabase write for Expected.
+      if (!row.monthly_entry_id) {
+        console.warn(
+          `Expected edit on row "${row.name}" has no monthly_entry_id; ` +
+          `skipping Supabase write (locally-created or linked row).`
+        );
+      } else {
+        const flusher = getExpectedFlusher(row.monthly_entry_id);
+        flusher(row, section, preEditExpected);
+      }
     } else if (field === 'subtype') {
+      // Stage 5E: write to budget_categories immediately (<select> is atomic, no debounce)
+      const preEditSubtype = row.subtype;  // capture BEFORE mutation
       row.subtype = normalizeSubtype(e.target.value, row.name);
       renderSummary();
+      if (row.id) {
+        withRetry(
+          () => window.puntoApi.updateBudgetCategory({ id: row.id, subtype: row.subtype }),
+          (err) => {
+            console.warn(`Stage 5E: subtype write failed for row ${row.id}, reverting:`, err);
+            row.subtype = preEditSubtype;
+            renderAll();
+            debouncedSave();
+          }
+        );
+      }
     }
 
     debouncedSave();
@@ -1518,12 +2703,27 @@ income:            'Income',
       const { id, section } = tr.dataset;
       const list    = getRowList(section);
       const idx     = list.findIndex(r => r.id === id);
-      const rowName = list[idx]?.name || 'unnamed';
+      if (idx === -1) return;
+      const rowName    = list[idx]?.name || 'unnamed';
+      const removedRow = list[idx];           // capture for revert
       pushUndo(`delete row '${rowName}'`);
-      if (idx !== -1) list.splice(idx, 1);
+      list.splice(idx, 1);
       expandedRows.delete(id);
       renderAll();
       debouncedSave();
+
+      // Stage 5E: soft-delete in Supabase. Orphan monthly_entries / transactions /
+      // adjustments persist server-side but are silently dropped by the read path
+      // (per Q5/Q6 of pre-work diagnostic).
+      withRetry(
+        () => window.puntoApi.softDeleteBudgetCategory(id),
+        (err) => {
+          console.warn(`Stage 5E: softDeleteBudgetCategory failed for row ${id}, restoring locally:`, err);
+          list.splice(idx, 0, removedRow);  // restore at original index
+          renderAll();
+          debouncedSave();
+        }
+      );
       return;
     }
 
@@ -1606,6 +2806,41 @@ income:            'Income',
       document.getElementById(`${section}-body`)
         ?.querySelector(`tr[data-id="${row.id}"] input`)?.focus();
       debouncedSave();
+
+      // Stage 5E: INSERT into Supabase, then precreate monthly_entry for current month.
+      // ensureMonthlyEntriesExist is awaited INSIDE the apiCall (vs. .then on the
+      // outer withRetry) because withRetry returns undefined, not the API result.
+      withRetry(
+        async () => {
+          const result = await window.puntoApi.insertBudgetCategory({
+            id:                  row.id,           // client UUID
+            name:                row.name || '',
+            section:             section,
+            subtype:             null,             // newRow doesn't set; defaults at render
+            sort_order:          row.order ?? 0,
+            is_linked:           row.isLinked === true,
+            linked_deduction_id: row.linkedDeductionId || null,
+          });
+          if (result && result.success) {
+            // Best-effort precreate of the current month's monthly_entry so 5C-3
+            // transaction writes succeed without the locally-created-row gap.
+            await ensureMonthlyEntriesExist(currentMonth);
+          }
+          return result;
+        },
+        (err) => {
+          // Terminal failure: row was never persisted server-side, undo locally
+          console.warn(`Stage 5E: insertBudgetCategory failed for row ${row.id}, removing locally:`, err);
+          const idx = list.findIndex(r => r.id === row.id);
+          if (idx !== -1) list.splice(idx, 1);
+          expandedRows.delete(row.id);
+          if (pendingAddRow && pendingAddRow.rowId === row.id) {
+            pendingAddRow = null;
+          }
+          renderAll();
+          debouncedSave();
+        }
+      );
     }
   }
 
@@ -1641,7 +2876,7 @@ income:            'Income',
     });
   }
 
-  function navigateMonth(delta) {
+  async function navigateMonth(delta) {
     flushSalaryEditSession();
     const [y, m] = currentMonth.split('-').map(Number);
     currentMonth = toMonthKey(new Date(y, m - 1 + delta, 1));
@@ -1649,7 +2884,22 @@ income:            'Income',
     ensureMonth(currentMonth);
     ensureSalaryMonth(currentMonth);
     saveState();
+    if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
+    showLoadingOverlay();
+    const [apiSalary, apiAdjustments, apiEntries, apiTransactions] = await Promise.all([
+      loadSalaryFromApi(currentMonth),
+      loadAdjustmentsFromApi(currentMonth),
+      loadMonthlyEntriesFromApi(currentMonth),
+      loadTransactionsFromApi(currentMonth),
+    ]);
+    applyApiSalaryToMonth(apiSalary, currentMonth);
+    await ensureSalaryRecordExists(currentMonth);
+    applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
+    applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+    await ensureMonthlyEntriesExist(currentMonth);
+    applyApiTransactionsToMonth(apiTransactions, currentMonth);
     buildMonthPicker();
+    hideLoadingOverlay();
     renderAll();
     closeMonthDropdown();
   }
@@ -1698,15 +2948,30 @@ income:            'Income',
         'data-month':    String(m),
         textContent:     name,
       });
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         flushSalaryEditSession();
         currentMonth = `${dropdownYear}-${String(m).padStart(2, '0')}`;
         expandedRows.clear();
         ensureMonth(currentMonth);
         ensureSalaryMonth(currentMonth);
         saveState();
+        if (apiCategoriesCache) applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
+        showLoadingOverlay();
+        const [apiSalary, apiAdjustments, apiEntries, apiTransactions] = await Promise.all([
+          loadSalaryFromApi(currentMonth),
+          loadAdjustmentsFromApi(currentMonth),
+          loadMonthlyEntriesFromApi(currentMonth),
+          loadTransactionsFromApi(currentMonth),
+        ]);
+        applyApiSalaryToMonth(apiSalary, currentMonth);
+        await ensureSalaryRecordExists(currentMonth);
+        applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
+        applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+        await ensureMonthlyEntriesExist(currentMonth);
+        applyApiTransactionsToMonth(apiTransactions, currentMonth);
         closeMonthDropdown();
         buildMonthPicker();
+        hideLoadingOverlay();
         renderAll();
       });
       grid.appendChild(btn);
@@ -2000,6 +3265,14 @@ income:            'Income',
 
     saveState();
     renderAll();
+
+    // Stage 5F-2: dual-write each future month. Serialize per-month so the
+    // salary_record upsert lands before its deduction inserts.
+    (async () => {
+      for (const k of futureKeys) {
+        await dualWriteSalaryMonthToApi(k);
+      }
+    })();
   }
 
   function renderDeductions(rec) {
@@ -2107,6 +3380,16 @@ income:            'Income',
     salaryEditSession.timer = setTimeout(endSalaryEditSession, SALARY_DEBOUNCE_MS);
   }
 
+  // Force any pending salary debounced writes (record + per-deduction) to
+  // fire NOW. Used by flushSalaryEditSession and beforeunload to close the
+  // localStorage-vs-Supabase drift window when the user leaves the page
+  // within the 800ms debounce window. Fire-and-forget (synchronous fire of
+  // the inner fn, which schedules its own async upsert/update).
+  function flushPendingSalaryApiWrites() {
+    salaryRecordFlushers.forEach(f => { try { f.flush(); } catch (e) {} });
+    salaryDeductionFlushers.forEach(f => { try { f.flush(); } catch (e) {} });
+  }
+
   function flushSalaryEditSession() {
     if (!salaryEditSession) return;
     clearTimeout(salaryEditSession.timer);
@@ -2115,6 +3398,9 @@ income:            'Income',
     if (JSON.stringify(state) === JSON.stringify(session.snapshot)) return;
     pushUndo('salary edit', session.snapshot);
     saveState();
+    // Stage 5F-2: flush any pending salary API writes too, so the DB
+    // matches localStorage after the user leaves the tab / closes the page.
+    flushPendingSalaryApiWrites();
   }
 
   function endSalaryEditSession() {
@@ -2141,6 +3427,13 @@ income:            'Income',
       }
       saveState();
       renderSalary();
+
+      // Stage 5F-2: dual-write each cloned future month, serialized.
+      (async () => {
+        for (const k of targets) {
+          await dualWriteSalaryMonthToApi(k);
+        }
+      })();
     }
   }
 
@@ -2165,6 +3458,8 @@ income:            'Income',
       beginSalaryEditSession();
       renderSalaryDerived();
       debouncedSave();
+      // Stage 5F-2: debounced dual-write to salary_records.
+      getSalaryRecordFlusher(currentMonth)();
       return;
     }
     if (target.id === 'salary-taxes') {
@@ -2174,6 +3469,8 @@ income:            'Income',
       beginSalaryEditSession();
       renderSalaryDerived();
       debouncedSave();
+      // Stage 5F-2: debounced dual-write to salary_records.
+      getSalaryRecordFlusher(currentMonth)();
       return;
     }
     const dedRow = target.closest('[data-deduction-id]');
@@ -2189,10 +3486,26 @@ income:            'Income',
       beginSalaryEditSession();
       if (field === 'amount') renderSalaryDerived();
       debouncedSave();
+      // Stage 5F-2: debounced dual-write to salary_deductions. Skip if no
+      // DB id yet (race with ensureSalaryRecordExists for fresh months —
+      // localStorage stays authoritative; 5H migration catches drift).
+      if (ded.id && ded.salaryRecordId) {
+        const apiFields = {};
+        if (field === 'name')   apiFields.name = ded.name;
+        if (field === 'amount') apiFields.amount = ded.amount;
+        if (field === 'type')   apiFields.deductionType = ded.type;
+        if (Object.keys(apiFields).length > 0) {
+          getSalaryDeductionFlusher(ded.id)(apiFields, ded, currentMonth);
+        }
+      } else {
+        console.warn(`5F-2: deduction edit skipped — no DB id yet for "${ded.name}"`);
+      }
+      // Also dual-write the salary_record so updated_at reflects the edit.
+      getSalaryRecordFlusher(currentMonth)();
     }
   }
 
-  function handleSalaryClick(e) {
+  async function handleSalaryClick(e) {
     if (e.target.id === 'salary-apply-future-btn') {
       applySalaryToFutureMonths();
       return;
@@ -2203,7 +3516,8 @@ income:            'Income',
       pushUndo('add deduction');
       const rec = getSalaryRecord(currentMonth);
       rec.deductions = rec.deductions || [];
-      rec.deductions.push(newDeduction('', 0));
+      const newDed = newDeduction('', 0);
+      rec.deductions.push(newDed);
       rec.salarySource = 'manual';
       saveState();
       renderDeductions(rec);
@@ -2211,6 +3525,32 @@ income:            'Income',
       const wrap = document.getElementById('salary-deductions');
       const lastRow = wrap?.lastElementChild;
       lastRow?.querySelector('input[data-deduction-field="name"]')?.focus();
+      // Stage 5F-2: dual-write the new deduction. Needs rec.id (the
+      // salary_record's UUID). If missing, fall back to a full month
+      // dual-write which will upsert the record AND insert this deduction.
+      if (window.puntoApi && typeof window.puntoApi.insertSalaryDeduction === 'function') {
+        if (rec.id) {
+          const sortOrder = rec.deductions.length - 1;
+          window.puntoApi.insertSalaryDeduction({
+            id:             newDed.id,
+            salaryRecordId: rec.id,
+            name:           newDed.name,
+            amount:         parseAmount(newDed.amount),
+            deductionType:  newDed.type || 'investment',
+            sortOrder,
+          }).then(r => {
+            if (r && r.success && r.data) {
+              newDed.salaryRecordId = rec.id;
+            } else {
+              console.warn(`5F-2 dual-write failed at insertSalaryDeduction (add):`,
+                           r && r.error);
+            }
+          });
+        } else {
+          // No salary_record id yet — kick off a full month dual-write.
+          dualWriteSalaryMonthToApi(currentMonth);
+        }
+      }
       return;
     }
 
@@ -2221,11 +3561,119 @@ income:            'Income',
       flushSalaryEditSession();
       pushUndo('delete deduction');
       const rec = getSalaryRecord(currentMonth);
-      rec.deductions = (rec.deductions || []).filter(d => d.id !== dedRow.dataset.deductionId);
+      const dedId = dedRow.dataset.deductionId;
+      const removedDed = (rec.deductions || []).find(d => d.id === dedId) || null;
+      rec.deductions = (rec.deductions || []).filter(d => d.id !== dedId);
       rec.salarySource = 'manual';
       saveState();
       renderDeductions(rec);
       renderSalaryDerived();
+      // Stage 5F-2: soft-delete the deduction in Supabase. Stage 5F-4 Part 4
+      // additionally refreshes the take-home salary_seed for the current
+      // month since removing a deduction changes computeTakeHome(rec).
+      // Stage 5F-4 Part 5 layers hybrid deletion on top: delete salary_seed
+      // transactions for current+future months, preserve past, detach the
+      // budget_categories row, drop the bridge Map entry.
+      if (removedDed && removedDed.salaryRecordId
+          && window.puntoApi && typeof window.puntoApi.softDeleteSalaryDeduction === 'function') {
+        const r = await window.puntoApi.softDeleteSalaryDeduction(removedDed.id);
+        if (!r || !r.success) {
+          console.warn(`5F-2 dual-write failed at softDeleteSalaryDeduction (${removedDed.id}):`,
+                       r && r.error);
+        }
+        // Drop the (now-stale) debouncer reference for the removed id.
+        salaryDeductionFlushers.delete(removedDed.id);
+      } else if (removedDed) {
+        console.warn(`5F-2: skipped softDeleteSalaryDeduction — no DB id for "${removedDed.name}"`);
+      }
+
+      // Stage 5F-4 Part 5: hybrid deletion of linked deduction's shadow rows.
+      // Only investment-type deductions were promoted; expense-type ones
+      // skip the entire block.
+      if (removedDed && (removedDed.type || 'investment') === 'investment') {
+        const normName = normalizeDeductionName(removedDed.name);
+        const bridgeEntry = linkedBudgetCategoryIds.get(normName);
+        if (bridgeEntry) {
+          // 5.4/5.5: delete salary_seed transactions for current + future
+          // months. Past months are preserved (monthKey < currentMonth).
+          // Failure to delete a single transaction is logged but doesn't
+          // abort the rest — match the rest-of-codebase best-effort pattern.
+          const toDelete = [];
+          for (const [monthKey, txnId] of bridgeEntry.salarySeedTxnIdByMonth.entries()) {
+            if (monthKey >= currentMonth) {
+              toDelete.push({ monthKey, txnId });
+            }
+          }
+          await Promise.all(toDelete.map(async ({ monthKey, txnId }) => {
+            const dr = await window.puntoApi.deleteSalarySeedTransaction(txnId);
+            if (dr && dr.success) {
+              bridgeEntry.salarySeedTxnIdByMonth.delete(monthKey);
+              // Reset actualByMonth to 0 — trigger will have recomputed
+              // monthly_entries.actual on the DB side. Optimistic mirror.
+              bridgeEntry.actualByMonth.set(monthKey, 0);
+            } else {
+              console.warn(`5F-4 Part 5: deleteSalarySeedTransaction failed for ${monthKey}:`,
+                           dr && dr.error);
+            }
+          }));
+
+          // 5.6: detach the budget_categories row globally. is_linked=false
+          // means future month-loads won't filter it out via Part 1B's guard
+          // — the row appears as a regular budget category.
+          if (bridgeEntry.budgetCategoryId
+              && window.puntoApi && typeof window.puntoApi.updateBudgetCategory === 'function') {
+            const ur = await window.puntoApi.updateBudgetCategory({
+              id:                  bridgeEntry.budgetCategoryId,
+              is_linked:           false,
+              linked_deduction_id: null,
+            });
+            if (!ur || !ur.success) {
+              console.warn(`5F-4 Part 5: updateBudgetCategory detach failed:`, ur && ur.error);
+            } else if (Array.isArray(apiCategoriesCache)) {
+              // Update the in-session cache so subsequent month-loads see
+              // is_linked=false (the row will appear in md.categories.* as
+              // a normal row). Without this, Part 1B's filter would keep
+              // hiding the row for the rest of the session.
+              const cached = apiCategoriesCache.find(
+                c => c && c.id === bridgeEntry.budgetCategoryId
+              );
+              if (cached) {
+                cached.is_linked = false;
+                cached.linked_deduction_id = null;
+              }
+            }
+          }
+
+          // Defensive: walk every loaded month's row tree and clear any
+          // linkedToSalary / isLinked flag that happens to match this
+          // budget_category's id. Post-Part-1B-filter, no loaded row should
+          // have row.id === budgetCategoryId, but this catches legacy state
+          // (rows already in memory from before 5F-4 shipped).
+          for (const md of Object.values(state.months || {})) {
+            if (!md) continue;
+            const allLists = [md.income || [], ...Object.values(md.categories || {})];
+            for (const list of allLists) {
+              for (const row of list || []) {
+                if (row && row.id === bridgeEntry.budgetCategoryId) {
+                  row.linkedToSalary = false;
+                  row.isLinked       = false;
+                }
+              }
+            }
+          }
+
+          // 5.7: drop the bridge Map entry. Re-adding the deduction by name
+          // will go through Part 3's promote path which creates a fresh entry.
+          linkedBudgetCategoryIds.delete(normName);
+        }
+      }
+
+      // Stage 5F-4 Part 4 hook (iii): take-home changed (deduction removed).
+      await upsertTakeHomeSalarySeed(currentMonth);
+
+      // Stage 5F-4 Part 5: re-render so the Budget tab reflects the detach.
+      // Salary tab inputs preserve focus via renderDeductions' activeId logic.
+      renderAll();
     }
   }
 
@@ -2270,6 +3718,38 @@ income:            'Income',
     set('currency-select',  state.settings.currency               ?? 'USD');
     set('format-select',    state.settings.numberFormat           ?? 'us');
     set('txndate-select',   state.settings.defaultTransactionDate ?? 'today');
+  }
+
+  function renderAccountSection(user) {
+    const settingsPage = document.querySelector('#page-settings .settings-page');
+    if (!settingsPage) return;
+    if (document.getElementById('account-section')) return;
+
+    const section = document.createElement('section');
+    section.id = 'account-section';
+    section.className = 'settings-section';
+    section.setAttribute('aria-labelledby', 'settings-account-heading');
+
+    const heading = document.createElement('h3');
+    heading.id = 'settings-account-heading';
+    heading.textContent = 'Account';
+
+    const emailEl = document.createElement('p');
+    emailEl.style.cssText = 'font-family:var(--font-mono);font-size:var(--text-sm);color:var(--color-text-muted);margin:0;word-break:break-all;';
+    emailEl.textContent = user?.email || '';
+
+    const signOutBtn = document.createElement('button');
+    signOutBtn.type = 'button';
+    signOutBtn.id = 'sign-out-btn';
+    signOutBtn.className = 'btn-secondary';
+    signOutBtn.style.alignSelf = 'flex-start';
+    signOutBtn.textContent = 'Sign Out';
+    signOutBtn.addEventListener('click', () => {
+      if (window.puntoAuth) window.puntoAuth.signOut();
+    });
+
+    section.append(heading, emailEl, signOutBtn);
+    settingsPage.appendChild(section);
   }
 
   // ============================================================
@@ -2435,6 +3915,33 @@ income:            'Income',
       if (!input) return;
       const tr = input.closest('tr[data-id]');
       if (!tr) return;
+      // Stage 5D: flush any pending Expected write immediately on blur.
+      // Runs before the pending-add / pendingUndo early returns below so
+      // it fires regardless of undo state. The monthly_entry_id guard
+      // catches locally-created rows (no DB row exists yet).
+      if (input.dataset.field === 'expected') {
+        const { id, section } = tr.dataset;
+        const row = findRow(section, id);
+        if (row?.monthly_entry_id) {
+          flushExpectedWrite(row, section, row.expected);
+          // Cancel the still-ticking debounced timer by dropping our
+          // reference. The timer's closure may still fire harmlessly
+          // later with the same data — v1 accepts this as a minor
+          // duplicate-write risk; see STAGE_5_PLAN.md.
+          expectedFlushers.delete(row.monthly_entry_id);
+        }
+      }
+      // Stage 5E: flush any pending Name write immediately on blur.
+      // Same v1 cancel-by-recreate pattern as Expected — the pending
+      // debounced timer may fire harmlessly later with the same data.
+      if (input.dataset.field === 'name') {
+        const { id, section } = tr.dataset;
+        const row = findRow(section, id);
+        if (row?.id) {
+          flushNameWrite(row.id, section, row.name, row.name);
+          nameFlushers.delete(row.id);
+        }
+      }
       if (pendingAddRow && tr.dataset.id === pendingAddRow.rowId) {
         // Only flush when focus leaves the row entirely (not just tab to next field)
         const relatedTr = e.relatedTarget?.closest?.('tr[data-id]');
@@ -2473,11 +3980,33 @@ income:            'Income',
   // ============================================================
   // INIT
   // ============================================================
-  function init() {
+  async function init() {
+    showLoadingOverlay();
     initState();
+    // Stage 5F-3: hydrate linkedBudgetCategoryIds in parallel with the rest.
+    // hydrateLinkedBudgetCategoryIds writes directly to the module-scope Map,
+    // so no destructuring needed — just await it alongside the others.
+    const [apiCats, apiSalary, apiAdjustments, apiEntries, apiTransactions] = await Promise.all([
+      loadCategoriesFromApi(),
+      loadSalaryFromApi(currentMonth),
+      loadAdjustmentsFromApi(currentMonth),
+      loadMonthlyEntriesFromApi(currentMonth),
+      loadTransactionsFromApi(currentMonth),
+      hydrateLinkedBudgetCategoryIds(),
+      hydrateTakeHomeSalarySeedIds(),
+    ]);
+    apiCategoriesCache = apiCats;
+    applyApiCategoriesToMonth(apiCategoriesCache, currentMonth);
+    applyApiSalaryToMonth(apiSalary, currentMonth);
+    await ensureSalaryRecordExists(currentMonth);
+    applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
+    applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+    await ensureMonthlyEntriesExist(currentMonth);
+    applyApiTransactionsToMonth(apiTransactions, currentMonth);
     syncSettingsUI();
     buildMonthPicker();
     bindSalaryInputFormatting();
+    hideLoadingOverlay();
     renderAll();
     bindEvents();
     initNav();
@@ -2489,10 +4018,39 @@ income:            'Income',
     else MOBILE_MQL.addListener(onBreakpointChange); // older Safari
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
+  async function bootstrap() {
+    if (!window.puntoAuth) {
+      console.error('Punto Base auth scripts did not load. Aborting.');
+      return;
+    }
+    const user = await window.puntoAuth.requireAuth();
+    if (!user) return; // requireAuth() redirected to login.html
+    await init();
+    renderAccountSection(user);
   }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootstrap);
+  } else {
+    bootstrap();
+  }
+
+  // Flush any pending debounced localStorage write before the page unloads or
+  // is hidden. 5F-2 extends this to also flush pending salary API writes —
+  // fire-and-forget, hands the request to the browser's network stack
+  // before the page tears down.
+  // TODO Stage 5C-3-2 (or 5J): flush in-flight retry queue via
+  // navigator.sendBeacon on beforeunload. For v1 we accept potential
+  // loss of in-retry writes on tab close.
+  window.addEventListener('beforeunload', () => {
+    saveState();
+    flushPendingSalaryApiWrites();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      saveState();
+      flushPendingSalaryApiWrites();
+    }
+  });
 
 })();
