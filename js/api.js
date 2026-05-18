@@ -155,6 +155,65 @@
     }
   }
 
+  // Stage 5G: write a new adjustment to the dedicated `adjustments` table.
+  // Mirrors insertSalarySeedTransaction's shape — accepts a client UUID so
+  // the in-memory id round-trips. note='' becomes null per the same pattern
+  // insertTransaction uses for description.
+  async function insertAdjustment(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!payload || !payload.category_id || !payload.month) {
+        return { success: false, error: 'insertAdjustment requires category_id and month' };
+      }
+      const row = {
+        id:          payload.id || undefined,  // client UUID, server default fallback
+        user_id:     userId,
+        category_id: payload.category_id,
+        month:       payload.month,
+        amount:      payload.amount ?? 0,
+        note:        payload.note || null,
+      };
+      const { data, error } = await client
+        .from('adjustments')
+        .insert(row)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  // Stage 5G: soft-delete an adjustment. The `adjustments` table HAS a
+  // deleted_at column (unlike `transactions`), so we mirror
+  // softDeleteSalaryDeduction's pattern: UPDATE deleted_at to now() with
+  // the .is('deleted_at', null) guard preventing double-deletion.
+  async function softDeleteAdjustment(id) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!id) {
+        return { success: false, error: 'softDeleteAdjustment requires id' };
+      }
+      const { data, error } = await client
+        .from('adjustments')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getTransactions(month) {
     try {
       const userId = await getUserId();
@@ -668,6 +727,8 @@
     getSalaryRecord,
     getSalaryDeductions,
     getAdjustments,
+    insertAdjustment,
+    softDeleteAdjustment,
     getTransactions,
     insertTransaction,
     deleteTransaction,

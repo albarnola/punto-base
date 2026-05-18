@@ -2525,7 +2525,7 @@ income:            'Income',
     debouncedSave();
   }
 
-  function addAdjustment(rowId, section, form) {
+  async function addAdjustment(rowId, section, form) {
     const amountInput = form.querySelector('.adj-input-amount');
     const noteInput   = form.querySelector('.adj-input-note');
 
@@ -2553,9 +2553,29 @@ income:            'Income',
     updateRowCells(rowId, section);
     renderSummary();
     debouncedSave();
+
+    // Stage 5G: dual-write to Supabase. Warn-on-failure pattern (matches
+    // 5F-2). localStorage stays authoritative; failures will reconcile when
+    // applyApiAdjustmentsToMonth overwrites row.adjustments on next reload —
+    // a failed-write adjustment is lost from the user's perspective. Same
+    // drift trade-off as 5F-2's tab-close-during-debounce. row.id is the
+    // budget_categories.id post-5F-3/4 (synthesized rows have the budget
+    // category UUID stamped by the bridge Map).
+    if (window.puntoApi && typeof window.puntoApi.insertAdjustment === 'function') {
+      const result = await window.puntoApi.insertAdjustment({
+        id:          adj.id,
+        category_id: row.id,
+        month:       currentMonth,
+        amount:      adj.amount,
+        note:        adj.note,
+      });
+      if (!result || !result.success) {
+        console.warn('5G: insertAdjustment failed:', result && result.error);
+      }
+    }
   }
 
-  function removeAdjustment(rowId, section, adjId, itemEl) {
+  async function removeAdjustment(rowId, section, adjId, itemEl) {
     const row = findRow(section, rowId);
     if (!row) return;
     const adjustments = row.adjustments || [];
@@ -2573,6 +2593,18 @@ income:            'Income',
     updateRowCells(rowId, section);
     renderSummary();
     debouncedSave();
+
+    // Stage 5G: dual-write soft-delete. Same warn-on-failure pattern as
+    // addAdjustment. localStorage is authoritative; a failed soft-delete
+    // leaves the row deleted-in-memory but still present in the DB until
+    // next reload's applyApiAdjustmentsToMonth overwrites (which would
+    // RE-ADD it from the DB). Same drift class as 5F-2.
+    if (window.puntoApi && typeof window.puntoApi.softDeleteAdjustment === 'function') {
+      const result = await window.puntoApi.softDeleteAdjustment(adjId);
+      if (!result || !result.success) {
+        console.warn('5G: softDeleteAdjustment failed:', result && result.error);
+      }
+    }
   }
 
   // ============================================================
