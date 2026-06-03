@@ -8,14 +8,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/styles.css?v=1" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/supabase-client.js"></script>
-  <script src="js/auth.js"></script>
-  <script src="js/api.js"></script>
+  <script src="js/supabase-client.js?v=1"></script>
+  <script src="js/auth.js?v=1"></script>
+  <script src="js/api.js?v=1"></script>
 </head>
 <body>
 
@@ -385,6 +385,10 @@
             <dd id="summary-income">$0.00</dd>
           </div>
           <div class="summary-item">
+            <dt>Total Expenses</dt>
+            <dd id="summary-expenses">$0.00</dd>
+          </div>
+          <div class="summary-item">
             <dt>Unallocated</dt>
             <dd id="summary-unallocated">$0.00</dd>
             <dd class="summary-insight" id="summary-insight"></dd>
@@ -470,6 +474,6 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js"></script>
+<script src="js/app.js?v=1"></script>
 </body>
 </html>
