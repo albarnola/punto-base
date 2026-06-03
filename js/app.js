@@ -13,7 +13,7 @@
       confirmYes:        'Yes',
       confirmCancel:     'Cancel',
       resetMonth:        'Reset This Month',
-      resetMonthConfirm: 'Clear all transactions for this month?',
+      resetMonthConfirm: "Clear this month's transactions, expected values, and adjustments? Category rows are kept.",
       clearAll:          'Clear All Data',
       clearAllConfirm:   'Wipe all budget data? This cannot be undone.',
       exportJson:        'Export JSON',
@@ -3061,11 +3061,66 @@ income:            'Income',
   // ============================================================
   function resetCurrentMonth() {
     const md = state.months[currentMonth];
-    md.income.forEach(r => (r.transactions = []));
-    Object.values(md.categories).forEach(list => list.forEach(r => (r.transactions = [])));
+    if (!md) return;
+    const allRows = [
+      ...(md.income || []),
+      ...Object.values(md.categories || {}).flatMap(l => l || []),
+    ];
+
+    // Capture ids BEFORE local mutation for the Supabase dual-write.
+    const txnIds         = allRows.flatMap(r => (r.transactions || []).map(t => t.id));
+    const adjIds         = allRows.flatMap(r => (r.adjustments  || []).map(a => a.id));
+    const monthlyEntryIds = allRows.map(r => r.monthly_entry_id).filter(Boolean);
+
+    pushUndo(`reset ${currentMonth}`);
+
+    // Local mutation — immediate UI feedback. Mirror the trigger by zeroing
+    // row.actual only when it's already a number (matches bumpRowActual's
+    // guard so getActual's sumTransactions fallback stays intact).
+    for (const r of allRows) {
+      r.transactions = [];
+      r.adjustments  = [];
+      r.expected     = 0;
+      if (typeof r.actual === 'number' && !isNaN(r.actual)) {
+        r.actual = 0;
+      }
+    }
     expandedRows.clear();
     saveState();
     renderAll();
+
+    // Dual-write to Supabase: delete transactions first so the trigger settles
+    // monthly_entries.actual to 0 before we update expected; then soft-delete
+    // adjustments. Idempotent — failed ops can be retried by re-running Reset.
+    (async () => {
+      showLoadingOverlay();
+      try {
+        const failures = [];
+
+        for (const id of txnIds) {
+          const res = await window.puntoApi.deleteTransaction(id);
+          if (!res || !res.success) failures.push(`transaction ${id}`);
+        }
+        for (const id of monthlyEntryIds) {
+          const res = await window.puntoApi.updateMonthlyEntry({ id, expected: 0 });
+          if (!res || !res.success) failures.push(`expected on entry ${id}`);
+        }
+        for (const id of adjIds) {
+          const res = await window.puntoApi.softDeleteAdjustment(id);
+          if (!res || !res.success) failures.push(`adjustment ${id}`);
+        }
+
+        if (failures.length > 0) {
+          alert(
+            'Reset completed with some failures:\n' +
+            failures.join('\n') +
+            '\n\nClick Reset again to retry the failed items.'
+          );
+        }
+      } finally {
+        hideLoadingOverlay();
+      }
+    })();
   }
 
   function clearAllData() {
