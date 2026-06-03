@@ -2148,6 +2148,7 @@ income:            'Income',
     const sum = computeSummary(state.months[currentMonth]);
 
     const incomeEl      = document.getElementById('summary-income');
+    const expensesEl    = document.getElementById('summary-expenses');
     const unallocatedEl = document.getElementById('summary-unallocated');
     const savingsEl     = document.getElementById('summary-savings');
     const investmentsEl = document.getElementById('summary-investments');
@@ -2155,6 +2156,7 @@ income:            'Income',
     const insightEl     = document.getElementById('summary-insight');
 
     if (incomeEl) incomeEl.textContent = formatCurrency(sum.incomeExpected);
+    if (expensesEl) expensesEl.textContent = formatCurrency(sum.expensesActual);
 
     if (unallocatedEl) {
       const u = Math.round(sum.unallocated * 100) / 100;
