@@ -1978,9 +1978,19 @@ income:            'Income',
     });
 
     const dateInput   = el('input', { type: 'date',   className: 'txn-input-date',   value: getDefaultDate() });
-    const amountInput = el('input', { type: 'number', className: 'txn-input-amount', placeholder: T('amountPlaceholder'), min: '0', step: '0.01' });
+    const amountInput = el('input', { type: 'text', inputmode: 'decimal', className: 'txn-input-amount', placeholder: T('amountPlaceholder') });
     const noteInput   = el('input', { type: 'text',   className: 'txn-input-note',   placeholder: T('notePlaceholder') });
     const addBtn      = el('button', { className: 'btn-add-txn', 'data-action': 'add-txn', textContent: T('addTransaction') });
+
+    // Show formatted currency when navigating out; raw number when editing.
+    amountInput.addEventListener('focus', () => {
+      const n = parseAmount(amountInput.value);
+      amountInput.value = n === 0 ? '' : String(n);
+    });
+    amountInput.addEventListener('blur', () => {
+      const n = parseAmount(amountInput.value);
+      amountInput.value = n === 0 ? '' : formatCurrency(n);
+    });
 
     // Enter submits from amount or note
     [amountInput, noteInput].forEach(input => {

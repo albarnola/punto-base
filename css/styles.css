@@ -907,7 +907,7 @@ tfoot td {
   display:     flex;
   align-items: center;
   gap:         var(--space-2);
-  flex-wrap:   wrap;
+  flex-wrap:   nowrap;
 }
 
 .txn-input-date,
@@ -923,9 +923,9 @@ tfoot td {
   transition:    border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.txn-input-date   { width: 140px; }
-.txn-input-amount { width: 110px; font-family: var(--font-mono); text-align: right; }
-.txn-input-note   { flex: 1; min-width: 120px; }
+.txn-input-date   { flex: 0 0 140px; width: 140px; }
+.txn-input-amount { flex: 0 0 110px; width: 110px; font-family: var(--font-mono); text-align: right; }
+.txn-input-note   { flex: 1; min-width: 160px; }
 
 .txn-input-date::-webkit-inner-spin-button,
 .txn-input-date::-webkit-outer-spin-button,
