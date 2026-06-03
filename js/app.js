@@ -3144,6 +3144,17 @@ income:            'Income',
       .sort();
   }
 
+  // Next N month keys after currentMonth (rolling, regardless of whether they
+  // exist in state yet). Used by apply-to-future to write a fixed horizon.
+  function getForwardMonthKeys(count) {
+    const [y, m] = currentMonth.split('-').map(Number);
+    const keys = [];
+    for (let i = 1; i <= count; i++) {
+      keys.push(toMonthKey(new Date(y, m - 1 + i, 1)));
+    }
+    return keys;
+  }
+
   function syncApplyFutureBtnLabel() {
     const btn = document.getElementById('apply-future-btn');
     if (!btn) return;
@@ -3157,13 +3168,9 @@ income:            'Income',
     const [cy, cm] = currentMonth.split('-').map(Number);
     const currName = new Date(cy, cm - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-    const futureKeys = getFutureMonthKeys();
-    if (futureKeys.length === 0) {
-      alert('No future months have data yet. New months will inherit from the most recent month when you visit them.');
-      return;
-    }
+    const futureKeys = getForwardMonthKeys(12);
 
-    const message = `Apply ${currName}'s setup to ${futureKeys.length} future month(s)? This will overwrite category names, expected values, and ordering in those months. Actual spending values will not be touched.`;
+    const message = `Apply ${currName}'s Expected values and category setup to the next 12 months? Future months will inherit category names, Expected amounts, and ordering. Actual spending values will not be touched.`;
     if (!confirm(message)) return;
 
     pushUndo(`apply ${currName} to future months`);
@@ -3190,6 +3197,10 @@ income:            'Income',
       });
     };
 
+    // Materialize each of the 12 forward months locally first so buildList has
+    // somewhere to write. ensureMonth is idempotent.
+    futureKeys.forEach(ensureMonth);
+
     futureKeys.forEach(key => {
       const fmd = state.months[key];
       if (!fmd) return;
@@ -3203,6 +3214,89 @@ income:            'Income',
 
     saveState();
     renderAll();
+
+    // Dual-write Expected values to Supabase across the 12-month horizon.
+    // Expense + Savings sections only — income/salary are out of scope here.
+    // Driver sources category_id from the CURRENT month's rows (real
+    // budget_categories ids); future-month local rows have fresh local UUIDs
+    // and cannot be used as category_id.
+    (async () => {
+      showLoadingOverlay();
+      try {
+        const expenseSections = ['fixed', 'variable', 'recreational', 'savings'];
+        const sourcePayloads = [];
+        for (const sectionKey of expenseSections) {
+          const list = md?.categories?.[sectionKey] || [];
+          for (const sourceRow of list) {
+            if (!sourceRow.id) continue;
+            sourcePayloads.push({
+              category_id: sourceRow.id,
+              expected:    parseAmount(sourceRow.expected || 0),
+              sectionKey,
+              name:        sourceRow.name,
+            });
+          }
+        }
+
+        const failures = [];
+
+        for (const futureKey of futureKeys) {
+          const res = await window.puntoApi.getMonthlyEntries(futureKey);
+          if (!res || !res.success) {
+            failures.push(`${futureKey} (load failed)`);
+            continue;
+          }
+          const entryByCategoryId = new Map();
+          for (const entry of (res.data || [])) {
+            entryByCategoryId.set(entry.category_id, entry);
+          }
+
+          for (const p of sourcePayloads) {
+            const existingEntry = entryByCategoryId.get(p.category_id);
+            if (existingEntry) {
+              const upd = await window.puntoApi.updateMonthlyEntry({
+                id:       existingEntry.id,
+                expected: p.expected,
+              });
+              if (!upd || !upd.success) {
+                failures.push(`${futureKey} (${p.name})`);
+              }
+            } else {
+              const ins = await window.puntoApi.insertMonthlyEntry({
+                category_id: p.category_id,
+                month:       futureKey,
+                expected:    p.expected,
+                actual:      0,
+              });
+              if (!ins || !ins.success) {
+                failures.push(`${futureKey} (${p.name})`);
+                continue;
+              }
+              // Stamp the new monthly_entry_id onto the matching future-month
+              // row (by name within the same section) so a later visit's
+              // ensureMonthlyEntriesExist sees it and doesn't re-create.
+              const fmd = state.months[futureKey];
+              const futList = fmd?.categories?.[p.sectionKey] || [];
+              const target = futList.find(r => r.name === p.name);
+              if (target && ins.data && ins.data.id) {
+                target.monthly_entry_id = ins.data.id;
+              }
+            }
+          }
+        }
+
+        saveState();
+        if (failures.length > 0) {
+          alert(
+            'Apply to future months completed with some failures:\n' +
+            failures.join('\n') +
+            '\n\nTry clicking the button again to retry the failed writes.'
+          );
+        }
+      } finally {
+        hideLoadingOverlay();
+      }
+    })();
   }
 
   // ============================================================
