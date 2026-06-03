@@ -1436,7 +1436,8 @@ income:            'Income',
     // UNALLOCATED — Take-Home (or manual income fallback) minus all post-tax
     // expected. Pre-Tax Investments are NOT subtracted: that money is already
     // deducted from gross before take-home is computed.
-    const incomeBasis = salaryActive ? takeHome : incomeExp;
+    const baseIncome  = salaryActive ? takeHome : incomeExp;
+    const incomeBasis = Math.max(baseIncome, incomeAct);
     const unallocated = incomeBasis - allocatedExp;
 
     // NET — Take-Home (or manual income fallback) minus post-tax actuals.
@@ -1446,6 +1447,7 @@ income:            'Income',
     return {
       incomeExpected:     incomeExp,
       incomeActual:       incomeAct,
+      incomeBasis:        incomeBasis,
       expensesExpected:   expensesExp,
       expensesActual:     expensesAct,
       savingsExpected:    savExp,
@@ -2155,7 +2157,7 @@ income:            'Income',
     const netEl         = document.getElementById('summary-net');
     const insightEl     = document.getElementById('summary-insight');
 
-    if (incomeEl) incomeEl.textContent = formatCurrency(sum.incomeExpected);
+    if (incomeEl) incomeEl.textContent = formatCurrency(sum.incomeBasis);
     if (expensesEl) expensesEl.textContent = formatCurrency(sum.expensesActual);
 
     if (unallocatedEl) {
@@ -2404,6 +2406,16 @@ income:            'Income',
   // ============================================================
   // ADD / REMOVE TRANSACTION
   // ============================================================
+
+  // Keep the cached row.actual in sync with a local transaction change.
+  // Only adjust when it's already a populated number; otherwise leave it
+  // unset so getActual's sumTransactions fallback stays in effect.
+  function bumpRowActual(row, delta) {
+    if (typeof row.actual === 'number' && !isNaN(row.actual)) {
+      row.actual = parseAmount(row.actual) + delta;
+    }
+  }
+
   function addTransaction(rowId, section, form) {
     const dateInput   = form.querySelector('.txn-input-date');
     const amountInput = form.querySelector('.txn-input-amount');
@@ -2418,6 +2430,7 @@ income:            'Income',
 
     const txn = newTransaction(amount, dateInput.value || getDefaultDate(), noteInput.value.trim());
     row.transactions.push(txn);
+    bumpRowActual(row, txn.amount);
 
     // Optimistic Supabase write (5C-3-1).
     if (!row.monthly_entry_id) {
@@ -2444,6 +2457,7 @@ income:            'Income',
           const idx = capturedRow.transactions.findIndex(t => t.id === capturedTxn.id);
           if (idx !== -1) {
             capturedRow.transactions.splice(idx, 1);
+            bumpRowActual(capturedRow, -capturedTxn.amount);
             const list = document.getElementById(`txn-list-${capturedRowId}`);
             const itemEl = list?.querySelector(`[data-txn-id="${capturedTxn.id}"]`);
             itemEl?.remove();
@@ -2480,6 +2494,7 @@ income:            'Income',
     if (idx === -1) return;
     pushUndo(`edit to ${row.name}`);
     const removedTxn = row.transactions.splice(idx, 1)[0];
+    bumpRowActual(row, -removedTxn.amount);
     itemEl.remove();
 
     // Optimistic Supabase write (5C-3-1).
@@ -2499,6 +2514,7 @@ income:            'Income',
         (err) => {
           console.warn('removeTransaction Supabase failure, reverting:', err);
           capturedRow.transactions.splice(capturedIdx, 0, capturedTxn);
+          bumpRowActual(capturedRow, capturedTxn.amount);
           const list = document.getElementById(`txn-list-${capturedRowId}`);
           if (list) {
             list.querySelector('.txn-empty')?.remove();
