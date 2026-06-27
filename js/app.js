@@ -1918,9 +1918,11 @@ income:            'Income',
     }
 
     tr.appendChild(el('td', {}, nameCell));
-    tr.appendChild(el('td', {}, expectedCell));
-    tr.appendChild(adjustable ? el('td', {}, actualCell) : el('td', { textContent: formatCurrency(actual) }));
-    tr.appendChild(el('td', { className: varianceClass, textContent: varianceText }));
+    tr.appendChild(el('td', { 'data-label': 'Expected' }, expectedCell));
+    tr.appendChild(adjustable
+      ? el('td', { 'data-label': 'Actual' }, actualCell)
+      : el('td', { 'data-label': 'Actual', textContent: formatCurrency(actual) }));
+    tr.appendChild(el('td', { 'data-label': 'Variance', className: varianceClass, textContent: varianceText }));
     tr.appendChild(el('td', {}, actionsWrapper));
     return tr;
   }
@@ -2115,6 +2117,7 @@ income:            'Income',
   function renderTable(tbodyId, rows, section) {
     const tbody = document.getElementById(tbodyId);
     if (!tbody) return;
+    tbody.closest('table')?.classList.add('budget-cards');
     tbody.innerHTML = '';
 
     let sorted;
