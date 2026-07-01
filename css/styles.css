@@ -599,6 +599,9 @@ tfoot td {
 #summary-net.positive { color: var(--color-positive); }
 #summary-net.negative { color: var(--color-negative); }
 
+#summary-cashflow.positive { color: var(--color-positive); }
+#summary-cashflow.negative { color: var(--color-negative); }
+
 #summary-unallocated.unallocated-success { color: var(--color-positive); }
 #summary-unallocated.unallocated-warning { color: var(--color-warning); }
 #summary-unallocated.unallocated-danger  { color: var(--color-negative); }
@@ -1789,7 +1792,7 @@ tfoot td {
     padding: var(--space-3) 0;
   }
   body {
-    padding-bottom: 160px;
+    padding-bottom: 200px;
   }
 
   .adjustment-add-form {

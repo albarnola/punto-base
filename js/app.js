@@ -2189,6 +2189,13 @@ income:            'Income',
       netEl.className   = sum.netActual >= 0 ? 'positive' : 'negative';
     }
 
+    const cashflowEl = document.getElementById('summary-cashflow');
+    if (cashflowEl) {
+      const cf = sum.incomeActual - sum.expensesActual;
+      cashflowEl.textContent = formatCurrency(cf);
+      cashflowEl.className    = cf >= 0 ? 'positive' : 'negative';
+    }
+
     if (insightEl) {
       const u = Math.round(sum.unallocated * 100) / 100;
       let text, cls;
