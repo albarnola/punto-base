@@ -5,6 +5,7 @@ All notable changes to Punto Base will be documented in this file.
 ## v0.4 — 2026-07-08
 
 ### Added
+- Net worth: Investing page renamed to "Net Worth" — new Checking, Savings, and Debt account types; debt balances entered as what you owe and subtracted from the total; tile shows an assets − debt breakdown when debt exists; chart plots net worth over time (migration: db/migrations/stage7_networth_account_types.sql)
 - CSV import: "Import CSV" button on the Budget page — upload a bank/card export, map date/description/amount columns (auto-detected), flip signs if money out is negative, assign each row to a budget category, and bulk-add transactions to the selected month
 - PWA support: manifest + service worker — install to home screen (teal icon), app shell loads offline; Supabase data is never cached
 - Link previews: Open Graph / Twitter meta tags with a teal logo card when sharing the site link (WhatsApp, iMessage, social)

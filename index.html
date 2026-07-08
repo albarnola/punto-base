@@ -4,20 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Punto Base Budget</title>
-  <meta name="description" content="Punto Base — a simple personal budget and investing tracker." />
+  <meta name="description" content="Punto Base — a simple personal budget and net worth tracker." />
 
   <!-- Link previews (WhatsApp, iMessage, social) -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Punto Base" />
   <meta property="og:title" content="Punto Base Budget" />
-  <meta property="og:description" content="A simple personal budget and investing tracker." />
+  <meta property="og:description" content="A simple personal budget and net worth tracker." />
   <meta property="og:url" content="https://albarnola.github.io/punto-base/" />
   <meta property="og:image" content="https://albarnola.github.io/punto-base/assets/og-image-square.png" />
   <meta property="og:image:width" content="800" />
   <meta property="og:image:height" content="800" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="Punto Base Budget" />
-  <meta name="twitter:description" content="A simple personal budget and investing tracker." />
+  <meta name="twitter:description" content="A simple personal budget and net worth tracker." />
   <meta name="twitter:image" content="https://albarnola.github.io/punto-base/assets/og-image-square.png" />
 
   <link rel="icon" type="image/png" href="assets/favicon.png" />
@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=14" />
+  <link rel="stylesheet" href="css/styles.css?v=15" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -95,12 +95,12 @@
         </a>
       </li>
       <li>
-        <a href="#investing" class="sidebar-item" data-page="investing" title="Investing">
+        <a href="#investing" class="sidebar-item" data-page="investing" title="Net Worth">
           <svg class="sidebar-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
             <polyline points="17 6 23 6 23 12"/>
           </svg>
-          <span class="nav-label">Investing</span>
+          <span class="nav-label">Net Worth</span>
         </a>
       </li>
       <li>
@@ -581,7 +581,7 @@
 
     </section>
 
-    <!-- Investing page -->
+    <!-- Net Worth page (internally "investing" for routing/storage) -->
     <section id="page-investing" class="page-hidden">
 
       <!-- Month Picker -->
@@ -591,12 +591,12 @@
 
       <!-- Heading -->
       <div class="page-header">
-        <h1 class="page-heading">Investing</h1>
+        <h1 class="page-heading">Net Worth</h1>
         <p class="page-subtitle">Log each account's balance monthly — balances carry forward until you update them</p>
       </div>
 
-      <!-- Portfolio tiles -->
-      <section class="dashboard-tiles investing-tiles" aria-label="Portfolio summary">
+      <!-- Net worth tiles -->
+      <section class="dashboard-tiles investing-tiles" aria-label="Net worth summary">
         <div class="dashboard-tile tile--saved">
           <span class="dashboard-tile-icon" aria-hidden="true">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -604,8 +604,9 @@
               <polyline points="17 6 23 6 23 12"/>
             </svg>
           </span>
-          <span class="dashboard-tile-label">Portfolio Value</span>
+          <span class="dashboard-tile-label">Net Worth</span>
           <span class="dashboard-tile-value" id="invest-total">$0.00</span>
+          <span class="dashboard-tile-sub" id="invest-total-sub" hidden></span>
         </div>
         <div class="dashboard-tile tile--net">
           <span class="dashboard-tile-icon" aria-hidden="true">
@@ -629,19 +630,19 @@
         </div>
       </section>
 
-      <!-- Portfolio chart -->
+      <!-- Net worth chart -->
       <section class="dashboard-trends" id="invest-chart-card" aria-labelledby="invest-chart-heading" hidden>
         <div class="dashboard-breakdown-header">
-          <h2 id="invest-chart-heading">Portfolio over time</h2>
+          <h2 id="invest-chart-heading">Net worth over time</h2>
           <span class="trends-range" id="invest-chart-range"></span>
         </div>
-        <div class="trends-chart invest-chart" id="invest-chart" role="img" aria-label="Portfolio value by month"></div>
+        <div class="trends-chart invest-chart" id="invest-chart" role="img" aria-label="Net worth by month"></div>
       </section>
 
       <!-- Accounts -->
       <section class="budget-section budget-section--investing" aria-labelledby="invest-accounts-heading">
         <h2 id="invest-accounts-heading">Accounts</h2>
-        <p class="section-note">Balances below are for the month selected above</p>
+        <p class="section-note">Balances below are for the month selected above. For debt accounts, enter what you owe — it's subtracted from your net worth.</p>
         <div class="table-wrapper">
           <table aria-labelledby="invest-accounts-heading">
             <thead>
@@ -658,7 +659,7 @@
             <tfoot>
               <tr>
                 <td colspan="4">
-                  <button class="btn-add" id="invest-add-account" type="button" aria-label="Add investment account">+ Add Account</button>
+                  <button class="btn-add" id="invest-add-account" type="button" aria-label="Add account">+ Add Account</button>
                 </td>
               </tr>
             </tfoot>
@@ -723,7 +724,7 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=14"></script>
+<script src="js/app.js?v=15"></script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {

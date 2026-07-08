@@ -1626,6 +1626,13 @@ tfoot td {
 #dashboard-net.negative { color: var(--color-negative); }
 #dashboard-net.neutral  { color: var(--color-text-muted); }
 
+/* Net worth page: change tile + debt accounts */
+.dashboard-tile-value.positive { color: var(--color-positive); }
+.dashboard-tile-value.negative { color: var(--color-negative); }
+.dashboard-tile-value.neutral  { color: var(--color-text-muted); }
+
+.invest-row--debt .invest-balance--debt { color: var(--color-negative); }
+
 /* Spending breakdown card */
 .dashboard-breakdown {
   background: var(--color-surface);

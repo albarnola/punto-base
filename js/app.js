@@ -2608,6 +2608,9 @@ income:            'Income',
     hsa:         'HSA',
     crypto:      'Crypto',
     cash:        'Cash',
+    checking:    'Checking',
+    savings:     'Savings',
+    debt:        'Debt',
     other:       'Other',
   };
 
@@ -2666,13 +2669,22 @@ income:            'Income',
     return best ? parseAmount(best.balance) : null;
   }
 
-  function investPortfolioAt(month) {
-    let total = 0, any = false;
+  // Assets vs. debt at `month`. Debt balances are entered as what you owe
+  // (positive) and subtracted when computing net worth.
+  function investBreakdownAt(month) {
+    let assets = 0, debt = 0, any = false;
     for (const acc of investing.accounts) {
       const bal = investBalanceAsOf(acc.id, month);
-      if (bal !== null) { total += bal; any = true; }
+      if (bal === null) continue;
+      any = true;
+      if (acc.account_type === 'debt') debt += bal; else assets += bal;
     }
-    return any ? total : null;
+    return any ? { net: assets - debt, assets, debt } : null;
+  }
+
+  function investPortfolioAt(month) {
+    const b = investBreakdownAt(month);
+    return b ? b.net : null;
   }
 
   async function investSetBalance(accountId, month, balance) {
@@ -2753,8 +2765,20 @@ income:            'Income',
     const contribEl = document.getElementById('invest-contrib');
     if (!totalEl) return;
 
-    const total = investPortfolioAt(currentMonth);
+    const bk    = investBreakdownAt(currentMonth);
+    const total = bk ? bk.net : null;
     totalEl.textContent = formatCurrency(total ?? 0);
+    totalEl.classList.toggle('negative', total !== null && total < 0);
+
+    const subEl = document.getElementById('invest-total-sub');
+    if (subEl) {
+      if (bk && bk.debt > 0) {
+        subEl.textContent = `${formatCurrency(bk.assets)} assets − ${formatCurrency(bk.debt)} debt`;
+        subEl.hidden = false;
+      } else {
+        subEl.hidden = true;
+      }
+    }
 
     const [y, m]  = currentMonth.split('-').map(Number);
     const prevKey = toMonthKey(new Date(y, m - 2, 1));
@@ -2813,7 +2837,7 @@ income:            'Income',
       });
       const bars = el('div', { className: 'trend-bars' });
       const bar  = el('div', { className: 'trend-bar trend-bar--portfolio' });
-      bar.style.height = ((d.total / max) * 100).toFixed(1) + '%';
+      bar.style.height = ((Math.max(0, d.total) / max) * 100).toFixed(1) + '%';
       bars.appendChild(bar);
       col.append(bars, el('span', { className: 'trend-month', textContent: name }));
       chart.appendChild(col);
@@ -2829,7 +2853,7 @@ income:            'Income',
       const tr = el('tr', { className: 'invest-empty-row' });
       const td = el('td', { colSpan: '4', className: 'invest-empty' });
       td.appendChild(el('p', {
-        textContent: 'No accounts yet — track your 401(k), Roth IRA, or brokerage here.',
+        textContent: 'No accounts yet — add investments, cash, and debts to track your net worth.',
       }));
       const btn = el('button', {
         type: 'button',
@@ -2844,7 +2868,8 @@ income:            'Income',
     }
 
     for (const acc of investing.accounts) {
-      const tr = el('tr', { 'data-id': acc.id });
+      const isDebt = acc.account_type === 'debt';
+      const tr = el('tr', { 'data-id': acc.id, className: isDebt ? 'invest-row--debt' : '' });
 
       // Name
       const nameInput = el('input', {
@@ -2877,6 +2902,7 @@ income:            'Income',
       typeSelect.value = acc.account_type || 'brokerage';
       typeSelect.addEventListener('change', () => {
         investUpdateAccount(acc, { account_type: typeSelect.value });
+        renderInvesting();   // debt/asset flip changes net worth + row styling
       });
       const typeTd = el('td');
       typeTd.appendChild(typeSelect);
@@ -2887,7 +2913,8 @@ income:            'Income',
       const balInput = el('input', {
         type: 'text',
         inputmode: 'decimal',
-        'aria-label': `Balance for ${acc.name || 'this account'}`,
+        className: isDebt ? 'invest-balance--debt' : '',
+        'aria-label': `${isDebt ? 'Amount owed' : 'Balance'} for ${acc.name || 'this account'}`,
         'data-field': 'balance',
       });
       if (snap) {
