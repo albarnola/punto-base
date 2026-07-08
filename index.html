@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=8" />
+  <link rel="stylesheet" href="css/styles.css?v=9" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -189,6 +189,21 @@
           <li><span class="expense-group-dot dot--fixed" aria-hidden="true"></span>Fixed <span class="legend-amt" id="breakdown-amt-fixed"></span></li>
           <li><span class="expense-group-dot dot--variable" aria-hidden="true"></span>Variable <span class="legend-amt" id="breakdown-amt-variable"></span></li>
           <li><span class="expense-group-dot dot--recreational" aria-hidden="true"></span>Recreational <span class="legend-amt" id="breakdown-amt-recreational"></span></li>
+        </ul>
+      </section>
+
+      <!-- Trends -->
+      <section class="dashboard-trends" id="dashboard-trends" aria-labelledby="trends-heading" hidden>
+        <div class="dashboard-breakdown-header">
+          <h2 id="trends-heading">Trends</h2>
+          <span class="trends-range">Last 6 months</span>
+        </div>
+        <div class="trends-chart" id="trends-chart" role="img" aria-label="Income and spending by month"></div>
+        <ul class="breakdown-legend" role="list">
+          <li><span class="expense-group-dot dot--income" aria-hidden="true"></span>Income</li>
+          <li><span class="expense-group-dot dot--fixed" aria-hidden="true"></span>Fixed</li>
+          <li><span class="expense-group-dot dot--variable" aria-hidden="true"></span>Variable</li>
+          <li><span class="expense-group-dot dot--recreational" aria-hidden="true"></span>Recreational</li>
         </ul>
       </section>
 
@@ -585,6 +600,6 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=8"></script>
+<script src="js/app.js?v=9"></script>
 </body>
 </html>

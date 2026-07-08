@@ -6,6 +6,7 @@ All notable changes to Punto Base will be documented in this file.
 
 ### Added
 - Recurring rows: opening a month with no data auto-fills expected values from the nearest prior month with a budget (actuals start at zero); a toast confirms "Budget carried over from …"
+- Dashboard "Trends" card: last 6 months of income vs spending as paired bars, spending stacked by Fixed / Variable / Recreational; current month updates live as you edit
 - Dashboard "Safe to spend" card: remaining flexible budget (Variable + Recreational) divided by days left in the month; shows over-budget state in red; only appears when viewing the current calendar month
 
 ### Changed
