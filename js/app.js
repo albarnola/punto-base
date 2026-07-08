@@ -2435,6 +2435,103 @@ income:            'Income',
         if (totalEl) totalEl.textContent = formatCurrency(totalParts);
       }
     }
+
+    renderTrends();
+  }
+
+  // ============================================================
+  // TRENDS (last 6 months of actuals on the dashboard)
+  // ============================================================
+  // Past months are fetched from monthly_entries once and cached for the
+  // session; the current month is always computed live from local state so
+  // the chart tracks edits without refetching. Hidden until at least two
+  // months in the window have any activity.
+  const trendsCache = new Map(); // monthKey -> { income, fixed, variable, recreational }
+
+  function trendsWindowKeys() {
+    const [y, m] = currentMonth.split('-').map(Number);
+    const keys = [];
+    for (let i = 5; i >= 0; i--) keys.push(toMonthKey(new Date(y, m - 1 - i, 1)));
+    return keys;
+  }
+
+  function computeCurrentMonthTotals() {
+    const md = state.months?.[currentMonth];
+    const t  = { income: 0, fixed: 0, variable: 0, recreational: 0 };
+    if (!md) return t;
+    for (const row of md.income || []) t.income += getActual(row, 'income');
+    for (const g of ['fixed', 'variable', 'recreational']) {
+      for (const row of md.categories?.[g] || []) t[g] += getActual(row, g);
+    }
+    return t;
+  }
+
+  async function ensureTrendsData() {
+    const missing = trendsWindowKeys().filter(k => k !== currentMonth && !trendsCache.has(k));
+    if (missing.length === 0) return;
+    if (!apiCategoriesCache) return;
+    if (!window.puntoApi || typeof window.puntoApi.getMonthlyEntries !== 'function') return;
+    const sectionById = new Map();
+    for (const cat of apiCategoriesCache) {
+      sectionById.set(cat.id, API_SECTION_MAP[cat.section]);
+    }
+    const results = await Promise.all(missing.map(k => window.puntoApi.getMonthlyEntries(k)));
+    missing.forEach((k, i) => {
+      const entries = (results[i] && results[i].success && results[i].data) || [];
+      const t = { income: 0, fixed: 0, variable: 0, recreational: 0 };
+      for (const e of entries) {
+        const sec = sectionById.get(e.category_id);
+        if (t[sec] !== undefined) t[sec] += parseAmount(e.actual);
+      }
+      trendsCache.set(k, t);
+    });
+  }
+
+  function renderTrends() {
+    const card  = document.getElementById('dashboard-trends');
+    const chart = document.getElementById('trends-chart');
+    if (!card || !chart) return;
+    ensureTrendsData().then(() => {
+      const empty = { income: 0, fixed: 0, variable: 0, recreational: 0 };
+      const data = trendsWindowKeys().map(k => ({
+        key: k,
+        t:   k === currentMonth ? computeCurrentMonthTotals() : (trendsCache.get(k) || empty),
+      }));
+      const spendOf = t => t.fixed + t.variable + t.recreational;
+      const active  = data.filter(d => d.t.income > 0 || spendOf(d.t) > 0).length;
+      if (active < 2) { card.hidden = true; return; }
+
+      const max = Math.max(1, ...data.map(d => Math.max(d.t.income, spendOf(d.t))));
+      card.hidden = false;
+      chart.innerHTML = '';
+      for (const d of data) {
+        const [y, m]  = d.key.split('-').map(Number);
+        const name    = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+        const spend   = spendOf(d.t);
+        const col = el('div', {
+          className: 'trend-col' + (d.key === currentMonth ? ' trend-col--current' : ''),
+          title:     `${name}: income ${formatCurrency(d.t.income)} · spent ${formatCurrency(spend)}`,
+        });
+        const bars = el('div', { className: 'trend-bars' });
+
+        const incomeBar = el('div', { className: 'trend-bar trend-bar--income' });
+        incomeBar.style.height = ((d.t.income / max) * 100).toFixed(1) + '%';
+
+        const spendBar = el('div', { className: 'trend-bar trend-bar--spend' });
+        spendBar.style.height = ((spend / max) * 100).toFixed(1) + '%';
+        for (const g of ['recreational', 'variable', 'fixed']) {
+          if (spend > 0 && d.t[g] > 0) {
+            const seg = el('div', { className: `trend-seg seg--${g}` });
+            seg.style.height = ((d.t[g] / spend) * 100).toFixed(1) + '%';
+            spendBar.appendChild(seg);
+          }
+        }
+
+        bars.append(incomeBar, spendBar);
+        col.append(bars, el('span', { className: 'trend-month', textContent: name }));
+        chart.appendChild(col);
+      }
+    });
   }
 
   // ============================================================

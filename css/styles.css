@@ -1676,6 +1676,84 @@ tfoot td {
   color: var(--color-text-muted);
 }
 
+/* ---- Trends ---- */
+.dashboard-trends {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: var(--color-surface);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-5) var(--space-6);
+}
+
+.trends-range {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.trends-chart {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+  height: 170px;
+}
+
+.trend-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.trend-bars {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+}
+
+.trend-bar {
+  width: 16px;
+  border-radius: 5px 5px 2px 2px;
+  min-height: 2px;
+}
+
+.trend-bar--income {
+  background: rgb(63 160 132 / .25);
+}
+
+.trend-bar--spend {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: transparent;
+}
+
+.trend-seg { width: 100%; }
+.trend-seg.seg--fixed        { background: var(--color-cat-fixed); }
+.trend-seg.seg--variable     { background: var(--color-cat-variable); }
+.trend-seg.seg--recreational { background: var(--color-cat-recreational); }
+
+.trend-month {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.trend-col--current .trend-month {
+  color: var(--color-brand-dark);
+  font-weight: var(--weight-semi);
+}
+
+.dot--income { background: rgb(63 160 132 / .3); }
+
 /* ---- Safe to spend ---- */
 .dashboard-safespend {
   display: flex;
@@ -1782,6 +1860,19 @@ tfoot td {
   .dashboard-safespend {
     padding: var(--space-4);
     gap: var(--space-3);
+  }
+
+  .dashboard-trends {
+    padding: var(--space-4);
+  }
+
+  .trends-chart {
+    height: 130px;
+    gap: var(--space-2);
+  }
+
+  .trend-bar {
+    width: 10px;
   }
 
   .safespend-value {
