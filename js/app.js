@@ -2318,6 +2318,7 @@ income:            'Income',
     renderSummary();
     renderSalary();
     renderDashboard();
+    renderInvesting();
     syncCopyBtnLabel();
     syncApplyFutureBtnLabel();
   }
@@ -2532,6 +2533,360 @@ income:            'Income',
         chart.appendChild(col);
       }
     });
+  }
+
+  // ============================================================
+  // INVESTING (Stage 6: accounts + monthly balance snapshots)
+  // ============================================================
+  // Accounts and snapshots live in their own Supabase tables
+  // (investment_accounts / investment_snapshots) with a localStorage cache
+  // for instant paint. Balances carry forward: the balance shown for a
+  // month is the most recent snapshot at or before it.
+  const INVESTING_LS_KEY = 'puntoBaseInvesting';
+
+  const INVEST_TYPES = {
+    '401k':      '401(k)',
+    roth_ira:    'Roth IRA',
+    ira:         'Trad. IRA',
+    brokerage:   'Brokerage',
+    hsa:         'HSA',
+    crypto:      'Crypto',
+    cash:        'Cash',
+    other:       'Other',
+  };
+
+  let investing = loadInvesting();
+  let investingHydrated = false;   // fetched from API this session
+  let investingLoadPromise = null;
+
+  function loadInvesting() {
+    try {
+      const raw = localStorage.getItem(INVESTING_LS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.accounts) && Array.isArray(parsed.snapshots)) return parsed;
+      }
+    } catch {}
+    return { accounts: [], snapshots: [] };
+  }
+
+  function saveInvesting() {
+    try { localStorage.setItem(INVESTING_LS_KEY, JSON.stringify(investing)); } catch {}
+  }
+
+  function ensureInvestingData() {
+    if (investingHydrated) return Promise.resolve();
+    if (investingLoadPromise) return investingLoadPromise;
+    if (!window.puntoApi ||
+        typeof window.puntoApi.getInvestmentAccounts !== 'function' ||
+        typeof window.puntoApi.getInvestmentSnapshots !== 'function') {
+      return Promise.resolve();
+    }
+    investingLoadPromise = Promise.all([
+      window.puntoApi.getInvestmentAccounts(),
+      window.puntoApi.getInvestmentSnapshots(),
+    ]).then(([accRes, snapRes]) => {
+      if (accRes && accRes.success && snapRes && snapRes.success) {
+        investing = { accounts: accRes.data, snapshots: snapRes.data };
+        investingHydrated = true;
+        saveInvesting();
+      }
+    }).catch(() => {}).finally(() => { investingLoadPromise = null; });
+    return investingLoadPromise;
+  }
+
+  function investSnapshotFor(accountId, month) {
+    return investing.snapshots.find(s => s.account_id === accountId && s.month === month) || null;
+  }
+
+  // Carry-forward balance: most recent snapshot at or before `month`.
+  // 'YYYY-MM' strings compare correctly lexicographically.
+  function investBalanceAsOf(accountId, month) {
+    let best = null;
+    for (const s of investing.snapshots) {
+      if (s.account_id !== accountId || s.month > month) continue;
+      if (!best || s.month > best.month) best = s;
+    }
+    return best ? parseAmount(best.balance) : null;
+  }
+
+  function investPortfolioAt(month) {
+    let total = 0, any = false;
+    for (const acc of investing.accounts) {
+      const bal = investBalanceAsOf(acc.id, month);
+      if (bal !== null) { total += bal; any = true; }
+    }
+    return any ? total : null;
+  }
+
+  async function investSetBalance(accountId, month, balance) {
+    const existing = investSnapshotFor(accountId, month);
+    if (existing) {
+      if (parseAmount(existing.balance) === balance) return;
+      existing.balance = balance;
+    } else {
+      investing.snapshots.push({ id: null, account_id: accountId, month, balance });
+    }
+    saveInvesting();
+    renderInvesting();
+    if (window.puntoApi && typeof window.puntoApi.upsertInvestmentSnapshot === 'function') {
+      const res = await window.puntoApi.upsertInvestmentSnapshot({ account_id: accountId, month, balance });
+      if (res && res.success && res.data) {
+        const snap = investSnapshotFor(accountId, month);
+        if (snap) { snap.id = res.data.id; saveInvesting(); }
+      } else if (res && res.error) {
+        showToast(`Sync failed: ${res.error}`);
+      }
+    }
+  }
+
+  async function investAddAccount() {
+    const acc = {
+      id:           crypto.randomUUID(),
+      name:         '',
+      account_type: 'brokerage',
+      sort_order:   investing.accounts.length,
+      _isNew:       true,   // rendered in edit mode; persisted on first name save
+    };
+    investing.accounts.push(acc);
+    renderInvesting();
+    const input = document.querySelector(`#invest-accounts-body tr[data-id="${acc.id}"] input[data-field="name"]`);
+    input?.focus();
+  }
+
+  async function investPersistAccount(acc) {
+    if (!window.puntoApi || typeof window.puntoApi.insertInvestmentAccount !== 'function') return;
+    const res = await window.puntoApi.insertInvestmentAccount({
+      id: acc.id, name: acc.name, account_type: acc.account_type, sort_order: acc.sort_order,
+    });
+    if (res && res.success) { delete acc._isNew; saveInvesting(); }
+    else if (res && res.error) showToast(`Sync failed: ${res.error}`);
+  }
+
+  async function investUpdateAccount(acc, fields) {
+    Object.assign(acc, fields);
+    saveInvesting();
+    if (acc._isNew) {
+      if (acc.name) await investPersistAccount(acc);
+      return;
+    }
+    if (window.puntoApi && typeof window.puntoApi.updateInvestmentAccount === 'function') {
+      const res = await window.puntoApi.updateInvestmentAccount({ id: acc.id, ...fields });
+      if (res && !res.success && res.error) showToast(`Sync failed: ${res.error}`);
+    }
+  }
+
+  async function investRemoveAccount(accountId) {
+    const acc = investing.accounts.find(a => a.id === accountId);
+    if (!acc) return;
+    const label = acc.name || 'this account';
+    if (!window.confirm(`Remove ${label}? Its balance history will no longer be shown.`)) return;
+    investing.accounts = investing.accounts.filter(a => a.id !== accountId);
+    investing.snapshots = investing.snapshots.filter(s => s.account_id !== accountId);
+    saveInvesting();
+    renderInvesting();
+    if (!acc._isNew && window.puntoApi && typeof window.puntoApi.softDeleteInvestmentAccount === 'function') {
+      const res = await window.puntoApi.softDeleteInvestmentAccount(accountId);
+      if (res && !res.success && res.error) showToast(`Sync failed: ${res.error}`);
+    }
+  }
+
+  function renderInvestingTiles() {
+    const totalEl   = document.getElementById('invest-total');
+    const changeEl  = document.getElementById('invest-change');
+    const contribEl = document.getElementById('invest-contrib');
+    if (!totalEl) return;
+
+    const total = investPortfolioAt(currentMonth);
+    totalEl.textContent = formatCurrency(total ?? 0);
+
+    const [y, m]  = currentMonth.split('-').map(Number);
+    const prevKey = toMonthKey(new Date(y, m - 2, 1));
+    const prev    = investPortfolioAt(prevKey);
+    if (changeEl) {
+      if (total === null || prev === null) {
+        changeEl.textContent = '—';
+        changeEl.className = 'dashboard-tile-value neutral';
+      } else {
+        const delta = Math.round((total - prev) * 100) / 100;
+        const sign  = delta > 0 ? '+' : delta < 0 ? '−' : '';
+        changeEl.textContent = `${sign}${formatCurrency(Math.abs(delta))}`;
+        changeEl.className = 'dashboard-tile-value ' +
+          (delta > 0 ? 'positive' : delta < 0 ? 'negative' : 'neutral');
+      }
+    }
+
+    if (contribEl) {
+      const md = state.months[currentMonth];
+      const contrib = md ? computeSummary(md).investmentsActual : 0;
+      contribEl.textContent = formatCurrency(contrib);
+    }
+  }
+
+  function renderInvestingChart() {
+    const card  = document.getElementById('invest-chart-card');
+    const chart = document.getElementById('invest-chart');
+    if (!card || !chart) return;
+
+    const snapMonths = investing.snapshots.map(s => s.month);
+    if (snapMonths.length === 0) { card.hidden = true; return; }
+    const firstMonth = snapMonths.reduce((a, b) => (a < b ? a : b));
+
+    // Window: from first snapshot to selected month, capped at 12 bars.
+    const keys = [];
+    const [cy, cm] = currentMonth.split('-').map(Number);
+    for (let i = 11; i >= 0; i--) {
+      const k = toMonthKey(new Date(cy, cm - 1 - i, 1));
+      if (k >= firstMonth) keys.push(k);
+    }
+    const data = keys.map(k => ({ key: k, total: investPortfolioAt(k) ?? 0 }));
+    if (data.length < 2) { card.hidden = true; return; }
+
+    card.hidden = false;
+    const rangeEl = document.getElementById('invest-chart-range');
+    if (rangeEl) rangeEl.textContent = `Last ${data.length} months`;
+
+    const max = Math.max(1, ...data.map(d => d.total));
+    chart.innerHTML = '';
+    for (const d of data) {
+      const [y, m] = d.key.split('-').map(Number);
+      const name   = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+      const col = el('div', {
+        className: 'trend-col' + (d.key === currentMonth ? ' trend-col--current' : ''),
+        title:     `${name}: ${formatCurrency(d.total)}`,
+      });
+      const bars = el('div', { className: 'trend-bars' });
+      const bar  = el('div', { className: 'trend-bar trend-bar--portfolio' });
+      bar.style.height = ((d.total / max) * 100).toFixed(1) + '%';
+      bars.appendChild(bar);
+      col.append(bars, el('span', { className: 'trend-month', textContent: name }));
+      chart.appendChild(col);
+    }
+  }
+
+  function renderInvestingAccounts() {
+    const body = document.getElementById('invest-accounts-body');
+    if (!body) return;
+    body.innerHTML = '';
+
+    if (investing.accounts.length === 0) {
+      const tr = el('tr', { className: 'invest-empty-row' });
+      const td = el('td', {
+        colSpan: '4',
+        className: 'invest-empty',
+        textContent: 'No accounts yet — add your 401(k), Roth IRA, or brokerage to start tracking.',
+      });
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+
+    for (const acc of investing.accounts) {
+      const tr = el('tr', { 'data-id': acc.id });
+
+      // Name
+      const nameInput = el('input', {
+        type: 'text',
+        placeholder: 'Account name',
+        'aria-label': `Name for ${acc.name || 'new account'}`,
+        'data-field': 'name',
+      });
+      nameInput.value = acc.name;
+      nameInput.addEventListener('blur', () => {
+        const name = nameInput.value.trim();
+        if (name !== acc.name) investUpdateAccount(acc, { name });
+      });
+      nameInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); nameInput.blur(); }
+      });
+      const nameTd = el('td');
+      const nameCell = el('div', { className: 'name-cell' });
+      nameCell.appendChild(nameInput);
+      nameTd.appendChild(nameCell);
+
+      // Type
+      const typeSelect = el('select', {
+        className: 'row-subtype invest-type',
+        'aria-label': `Type for ${acc.name || 'this account'}`,
+      });
+      for (const [value, label] of Object.entries(INVEST_TYPES)) {
+        typeSelect.appendChild(el('option', { value, textContent: label }));
+      }
+      typeSelect.value = acc.account_type || 'brokerage';
+      typeSelect.addEventListener('change', () => {
+        investUpdateAccount(acc, { account_type: typeSelect.value });
+      });
+      const typeTd = el('td');
+      typeTd.appendChild(typeSelect);
+
+      // Balance for the selected month (carry-forward as placeholder)
+      const snap    = investSnapshotFor(acc.id, currentMonth);
+      const carried = investBalanceAsOf(acc.id, currentMonth);
+      const balInput = el('input', {
+        type: 'text',
+        inputmode: 'decimal',
+        'aria-label': `Balance for ${acc.name || 'this account'}`,
+        'data-field': 'balance',
+      });
+      if (snap) {
+        balInput.value = formatCurrency(parseAmount(snap.balance));
+      } else {
+        balInput.value = '';
+        balInput.placeholder = carried !== null ? `${formatCurrency(carried)} (carried)` : formatCurrency(0);
+      }
+      balInput.addEventListener('focus', () => {
+        const raw = parseAmount(balInput.value);
+        balInput.value = raw === 0 ? '' : String(raw);
+      });
+      balInput.addEventListener('blur', () => {
+        if (balInput.value.trim() === '') {
+          // No entry for this month — keep carry-forward, don't write a zero.
+          const s = investSnapshotFor(acc.id, currentMonth);
+          if (!s) { renderInvesting(); return; }
+        }
+        investSetBalance(acc.id, currentMonth, parseAmount(balInput.value));
+      });
+      balInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); balInput.blur(); }
+      });
+      const balTd = el('td');
+      balTd.appendChild(balInput);
+
+      // Actions
+      const removeBtn = el('button', {
+        className: 'btn-remove',
+        'aria-label': `Remove ${acc.name || 'account'}`,
+        textContent: '✕',
+      });
+      removeBtn.addEventListener('click', () => investRemoveAccount(acc.id));
+      const actionsTd = el('td');
+      const actions = el('div', { className: 'row-actions' });
+      actions.appendChild(removeBtn);
+      actionsTd.appendChild(actions);
+
+      tr.append(nameTd, typeTd, balTd, actionsTd);
+      body.appendChild(tr);
+    }
+  }
+
+  function renderInvesting() {
+    if (!document.getElementById('page-investing')) return;
+    renderInvestingTiles();
+    renderInvestingChart();
+    renderInvestingAccounts();
+    ensureInvestingData().then(() => {
+      if (investingHydrated && !renderInvesting._repainted) {
+        renderInvesting._repainted = true;
+        renderInvestingTiles();
+        renderInvestingChart();
+        renderInvestingAccounts();
+      }
+    });
+  }
+
+  function initInvesting() {
+    document.getElementById('invest-add-account')
+      ?.addEventListener('click', () => investAddAccount());
   }
 
   // ============================================================
@@ -4214,6 +4569,7 @@ income:            'Income',
     // Re-render when entering Budget or Dashboard so any salary/budget edits
     // made on another page are reflected.
     if (pageName === 'budget' || pageName === 'dashboard') renderAll();
+    if (pageName === 'investing') renderInvesting();
 
     history.replaceState(null, '', `#${pageName}`);
   }
@@ -4450,6 +4806,7 @@ income:            'Income',
     bindEvents();
     initNav();
     initSidebar();
+    initInvesting();
 
     // Re-render when crossing the mobile breakpoint so currency formatting refreshes
     const onBreakpointChange = () => renderAll();

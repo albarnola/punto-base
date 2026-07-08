@@ -703,6 +703,166 @@
     }
   }
 
+  // ============================================================
+  // Stage 6: Investing — accounts + monthly balance snapshots
+  // ============================================================
+  async function getInvestmentAccounts() {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('investment_accounts')
+        .select('id, name, account_type, sort_order')
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .order('sort_order', { ascending: true });
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || [] };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function insertInvestmentAccount(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const row = {
+        id:           payload.id || undefined,  // client UUID precedent
+        user_id:      userId,
+        name:         payload.name || '',
+        account_type: payload.account_type || 'brokerage',
+        sort_order:   payload.sort_order ?? 0,
+      };
+      const { data, error } = await client
+        .from('investment_accounts')
+        .insert(row)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function updateInvestmentAccount({ id, ...fields }) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!id) return { success: false, error: 'updateInvestmentAccount requires id' };
+      const allowed = ['name', 'account_type', 'sort_order'];
+      const update = { updated_at: new Date().toISOString() };
+      for (const k of allowed) {
+        if (k in fields) update[k] = fields[k];
+      }
+      const { data, error } = await client
+        .from('investment_accounts')
+        .update(update)
+        .eq('id', id)
+        .eq('user_id', userId)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  async function softDeleteInvestmentAccount(id) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!id) return { success: false, error: 'softDeleteInvestmentAccount requires id' };
+      const { data, error } = await client
+        .from('investment_accounts')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  // All snapshots for the user in one call — data volume is tiny
+  // (accounts × months), and the chart needs the full history anyway.
+  async function getInvestmentSnapshots() {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      const { data, error } = await client
+        .from('investment_snapshots')
+        .select('id, account_id, month, balance')
+        .eq('user_id', userId)
+        .order('month', { ascending: true });
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data: data || [] };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
+  // SELECT-then-UPDATE-or-INSERT on (account_id, month) — same pattern as
+  // upsertSalaryRecord. Single-user single-device, so no race concerns.
+  async function upsertInvestmentSnapshot(payload) {
+    try {
+      const userId = await getUserId();
+      if (!userId) return notSignedIn();
+      const client = await getClient();
+      if (!payload || !payload.account_id || !payload.month) {
+        return { success: false, error: 'upsertInvestmentSnapshot requires account_id and month' };
+      }
+      const { data: existing, error: selErr } = await client
+        .from('investment_snapshots')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('account_id', payload.account_id)
+        .eq('month', payload.month)
+        .limit(1)
+        .maybeSingle();
+      if (selErr) return { success: false, error: friendlyError(selErr) };
+
+      if (existing && existing.id) {
+        const { data, error } = await client
+          .from('investment_snapshots')
+          .update({ balance: payload.balance ?? 0, updated_at: new Date().toISOString() })
+          .eq('id', existing.id)
+          .eq('user_id', userId)
+          .select()
+          .single();
+        if (error) return { success: false, error: friendlyError(error) };
+        return { success: true, data };
+      }
+
+      const row = {
+        user_id:    userId,
+        account_id: payload.account_id,
+        month:      payload.month,
+        balance:    payload.balance ?? 0,
+      };
+      const { data, error } = await client
+        .from('investment_snapshots')
+        .insert(row)
+        .select()
+        .single();
+      if (error) return { success: false, error: friendlyError(error) };
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, error: friendlyError(err) };
+    }
+  }
+
   async function getUserPreferences() {
     try {
       const userId = await getUserId();
@@ -747,5 +907,11 @@
     softDeleteSalaryDeduction,
     softDeleteSalaryDeductionsForRecord,
     getUserPreferences,
+    getInvestmentAccounts,
+    insertInvestmentAccount,
+    updateInvestmentAccount,
+    softDeleteInvestmentAccount,
+    getInvestmentSnapshots,
+    upsertInvestmentSnapshot,
   };
 })();
