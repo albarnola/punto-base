@@ -814,6 +814,74 @@ income:            'Income',
   }
 
   // ============================================================
+  // RECURRING ROWS (auto-carry expected values into fresh months)
+  // ============================================================
+  // A month is "fresh" when it has no monthly_entries or every entry is
+  // zero/zero (the auto-created placeholders). On first visit to a fresh
+  // month, expected values are seeded from the nearest prior month that
+  // has any non-zero expected, then persisted: rows whose entry already
+  // exists are updated in place; rows without one are inserted by
+  // ensureMonthlyEntriesExist right after. Actuals always start at zero.
+  // Best-effort: localStorage is authoritative; failures are logged.
+  function monthIsFresh(entries) {
+    return (entries || []).every(e =>
+      parseAmount(e.expected) === 0 && parseAmount(e.actual) === 0
+    );
+  }
+
+  async function seedExpectedFromPriorMonth(monthKey) {
+    const md = state.months?.[monthKey];
+    if (!md) return;
+    if (!window.puntoApi || typeof window.puntoApi.getMonthlyEntries !== 'function') return;
+
+    let [y, m] = monthKey.split('-').map(Number);
+    for (let hop = 0; hop < 12; hop++) {
+      m--;
+      if (m === 0) { m = 12; y--; }
+      const priorKey = `${y}-${String(m).padStart(2, '0')}`;
+      const result   = await window.puntoApi.getMonthlyEntries(priorKey);
+      const entries  = (result && result.success && result.data) || [];
+      const nonZero  = entries.filter(e => parseAmount(e.expected) !== 0);
+      if (nonZero.length === 0) continue;
+
+      // Categories are global, so row.id matches entry.category_id across months.
+      const byId = new Map();
+      for (const row of md.income || []) byId.set(row.id, row);
+      for (const list of Object.values(md.categories || {})) {
+        for (const row of list || []) byId.set(row.id, row);
+      }
+
+      const updates = [];
+      let seeded = 0;
+      for (const entry of nonZero) {
+        const row = byId.get(entry.category_id);
+        if (!row) continue;
+        row.expected = parseAmount(entry.expected);
+        seeded++;
+        if (row.monthly_entry_id) {
+          updates.push(window.puntoApi.updateMonthlyEntry({
+            id:       row.monthly_entry_id,
+            expected: row.expected,
+          }));
+        }
+      }
+
+      if (seeded > 0) {
+        saveState();
+        if (updates.length > 0) {
+          const results = await Promise.all(updates);
+          for (const r of results) {
+            if (!r || !r.success) console.warn('Recurring seed update failed:', r && r.error);
+          }
+        }
+        const priorName = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long' });
+        showToast(`Budget carried over from ${priorName}`);
+      }
+      return;
+    }
+  }
+
+  // ============================================================
   // SALARY DUAL-WRITE (Stage 5F-2 + 5F-2.1 cleanup)
   // ============================================================
   // Make DB state for one month exactly match in-memory state. Idempotent:
@@ -3018,6 +3086,7 @@ income:            'Income',
     await ensureSalaryRecordExists(currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+    if (monthIsFresh(apiEntries)) await seedExpectedFromPriorMonth(currentMonth);
     await ensureMonthlyEntriesExist(currentMonth);
     applyApiTransactionsToMonth(apiTransactions, currentMonth);
     buildMonthPicker();
@@ -3089,6 +3158,7 @@ income:            'Income',
         await ensureSalaryRecordExists(currentMonth);
         applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
         applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+        if (monthIsFresh(apiEntries)) await seedExpectedFromPriorMonth(currentMonth);
         await ensureMonthlyEntriesExist(currentMonth);
         applyApiTransactionsToMonth(apiTransactions, currentMonth);
         closeMonthDropdown();
@@ -4272,6 +4342,7 @@ income:            'Income',
     await ensureSalaryRecordExists(currentMonth);
     applyApiAdjustmentsToMonth(apiAdjustments, currentMonth);
     applyApiMonthlyEntriesToMonth(apiEntries, currentMonth);
+    if (monthIsFresh(apiEntries)) await seedExpectedFromPriorMonth(currentMonth);
     await ensureMonthlyEntriesExist(currentMonth);
     applyApiTransactionsToMonth(apiTransactions, currentMonth);
     syncSettingsUI();
