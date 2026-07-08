@@ -5,6 +5,11 @@ All notable changes to Punto Base will be documented in this file.
 ## v0.4 — 2026-07-08
 
 ### Added
+- PWA support: manifest + service worker — install to home screen (teal icon), app shell loads offline; Supabase data is never cached
+- Link previews: Open Graph / Twitter meta tags with a teal logo card when sharing the site link (WhatsApp, iMessage, social)
+- Empty states: dashboard shows a friendly card with "Set up Salary" / "Go to Budget" when a month has no data; empty budget sections hint at "+ Add"; Investing gets an "Add your first account" button
+- Dashboard hybrid income basis: past months use actual income received (with "vs projected" note); current month keeps the projection and shows "received so far"; net tile reads "Expected Cash Left" until the month is over
+- Recurring-row seeding no longer fabricates history: browsing to an old empty month leaves it empty (only current/future months auto-seed)
 - Investing page (replaces placeholder): add accounts (401k, Roth IRA, brokerage…), log each account's balance per month; balances carry forward until updated. Tiles for portfolio value, 1-month change, and this month's contributions from the budget; portfolio-over-time bar chart (up to 12 months). New Supabase tables `investment_accounts` + `investment_snapshots` (migration: db/migrations/stage6_investing_schema.sql)
 - Recurring rows: opening a month with no data auto-fills expected values from the nearest prior month with a budget (actuals start at zero); a toast confirms "Budget carried over from …"
 - Dashboard "Trends" card: last 6 months of income vs spending as paired bars, spending stacked by Fixed / Variable / Recreational; current month updates live as you edit

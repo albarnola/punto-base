@@ -21,10 +21,16 @@
   <meta name="twitter:image" content="https://albarnola.github.io/punto-base/assets/og-image-square.png" />
 
   <link rel="icon" type="image/png" href="assets/favicon.png" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#3FA084" />
+  <link rel="apple-touch-icon" href="assets/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Punto Base" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=12" />
+  <link rel="stylesheet" href="css/styles.css?v=13" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -126,8 +132,24 @@
         <p class="dashboard-subtitle" id="dashboard-subtitle"></p>
       </div>
 
+      <!-- Empty state (shown when the month has no data at all) -->
+      <section class="dashboard-empty" id="dashboard-empty" hidden aria-label="No data yet">
+        <span class="dashboard-empty-icon" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+            <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+          </svg>
+        </span>
+        <h2 class="dashboard-empty-title">Nothing here yet</h2>
+        <p class="dashboard-empty-text">Set up your salary or add income and expenses to see this month at a glance.</p>
+        <div class="dashboard-empty-actions">
+          <button type="button" class="btn-primary" id="empty-goto-salary">Set up Salary</button>
+          <button type="button" class="btn-secondary" id="empty-goto-budget">Go to Budget</button>
+        </div>
+      </section>
+
       <!-- Summary tiles -->
-      <section class="dashboard-tiles" aria-label="Monthly financial summary">
+      <section class="dashboard-tiles" id="dashboard-tiles" aria-label="Monthly financial summary">
         <div class="dashboard-tile tile--income">
           <span class="dashboard-tile-icon" aria-hidden="true">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -697,6 +719,13 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=12"></script>
+<script src="js/app.js?v=13"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function () {});
+    });
+  }
+</script>
 </body>
 </html>
