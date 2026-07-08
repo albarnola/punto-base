@@ -2959,6 +2959,335 @@ income:            'Income',
   }
 
   // ============================================================
+  // CSV IMPORT
+  // ============================================================
+  // Import bank/card CSV exports as transactions: pick the date /
+  // description / amount columns, assign each row to a budget category,
+  // and bulk-add into the currently selected month. Rows dated outside
+  // the selected month are listed but can't be imported (switch months).
+
+  // Minimal RFC-4180-ish parser: quoted fields, escaped quotes, CRLF.
+  function parseCSV(text) {
+    const rows = [];
+    let row = [], field = '', inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += ch;
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        row.push(field); field = '';
+      } else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && text[i + 1] === '\n') i++;
+        row.push(field); field = '';
+        if (row.some(c => c.trim() !== '')) rows.push(row);
+        row = [];
+      } else field += ch;
+    }
+    row.push(field);
+    if (row.some(c => c.trim() !== '')) rows.push(row);
+    return rows;
+  }
+
+  // Normalize a CSV date cell to 'YYYY-MM-DD', or null if unparseable.
+  function parseCsvDate(s) {
+    s = (s || '').trim();
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);          // ISO
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);          // US M/D/Y
+    if (m) {
+      let yr = Number(m[3]); if (yr < 100) yr += 2000;
+      return `${yr}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+    }
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+    return null;
+  }
+
+  function parseCsvAmount(s) {
+    s = (s || '').trim().replace(/[$,\s]/g, '');
+    if (/^\(.*\)$/.test(s)) s = '-' + s.slice(1, -1);          // (12.34) = negative
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  }
+
+  const IMPORT_SECTIONS = [
+    ['income',       'Income'],
+    ['fixed',        'Fixed'],
+    ['variable',     'Variable'],
+    ['recreational', 'Recreational'],
+    ['savings',      'Savings & Investments'],
+  ];
+
+  function importRowsForSection(section) {
+    const md = state.months[currentMonth];
+    return section === 'income' ? (md.income || []) : (md.categories[section] || []);
+  }
+
+  let importModalEl = null;
+
+  function closeImportModal() {
+    importModalEl?.remove();
+    importModalEl = null;
+    document.removeEventListener('keydown', onImportEsc);
+  }
+
+  function onImportEsc(e) { if (e.key === 'Escape') closeImportModal(); }
+
+  function openImportModal(csvRows) {
+    closeImportModal();
+    if (!csvRows.length || csvRows[0].length < 2) {
+      showToast('Could not read that file as a CSV.');
+      return;
+    }
+
+    const colCount  = Math.max(...csvRows.map(r => r.length));
+    const first     = csvRows[0];
+    const hasHeader = first.some(c => /date|desc|memo|payee|amount|amt|debit|credit|balance|name|detail/i.test(c)) &&
+                      !first.some(c => parseCsvDate(c));
+    const headers   = hasHeader
+      ? first.map((c, i) => c.trim() || `Column ${i + 1}`)
+      : Array.from({ length: colCount }, (_, i) => `Column ${i + 1}`);
+    const dataRows  = hasHeader ? csvRows.slice(1) : csvRows;
+
+    // Auto-detect columns.
+    const guessCol = (re, validate) => {
+      for (let i = 0; i < colCount; i++) {
+        if (hasHeader && re.test(headers[i])) return i;
+      }
+      for (let i = 0; i < colCount; i++) {
+        if (dataRows[0] && validate(dataRows[0][i])) return i;
+      }
+      return -1;
+    };
+    let dateCol = guessCol(/date|posted/i, c => !!parseCsvDate(c));
+    let descCol = guessCol(/desc|memo|payee|name|detail|merchant/i,
+      c => !!c && !parseCsvDate(c) && parseCsvAmount(c) === null);
+    let amtCol  = guessCol(/amount|amt|debit|value/i,
+      c => parseCsvAmount(c) !== null && !parseCsvDate(c));
+
+    const backdrop = el('div', { className: 'import-backdrop' });
+    const modal    = el('div', { className: 'import-modal', role: 'dialog', 'aria-label': 'Import CSV' });
+
+    const title    = el('h2', { className: 'import-title', textContent: 'Import CSV' });
+    const closeBtn = el('button', { className: 'btn-icon import-close', 'aria-label': 'Close' }, '✕');
+    closeBtn.addEventListener('click', closeImportModal);
+
+    const body = el('div', { className: 'import-body' });
+    modal.append(el('div', { className: 'import-header' }, title, closeBtn), body);
+    backdrop.appendChild(modal);
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) closeImportModal(); });
+    document.body.appendChild(backdrop);
+    importModalEl = backdrop;
+    document.addEventListener('keydown', onImportEsc);
+
+    // ---- Step 1: column mapping ----
+    function renderStep1() {
+      body.innerHTML = '';
+
+      const makeSelect = (selected) => {
+        const sel = el('select', { className: 'row-subtype import-col-select' });
+        headers.forEach((h, i) => {
+          const opt = el('option', { value: String(i), textContent: h });
+          if (i === selected) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        return sel;
+      };
+      const dateSel = makeSelect(dateCol === -1 ? 0 : dateCol);
+      const descSel = makeSelect(descCol === -1 ? 0 : descCol);
+      const amtSel  = makeSelect(amtCol  === -1 ? 0 : amtCol);
+
+      const negCount  = dataRows.filter(r => (parseCsvAmount(r[Number(amtSel.value)]) ?? 0) < 0).length;
+      const flipCheck = el('input', { type: 'checkbox', id: 'import-flip' });
+      flipCheck.checked = negCount > dataRows.length / 2;
+
+      const mapGrid = el('div', { className: 'import-map-grid' },
+        el('label', { textContent: 'Date column' }),        dateSel,
+        el('label', { textContent: 'Description column' }), descSel,
+        el('label', { textContent: 'Amount column' }),      amtSel,
+      );
+      const flipRow = el('div', { className: 'import-flip-row' });
+      const flipLabel = el('label', { for: 'import-flip', textContent: ' Money out is negative in this file (flip signs on import)' });
+      flipRow.append(flipCheck, flipLabel);
+
+      const preview = el('div', { className: 'import-preview' });
+      const renderPreview = () => {
+        preview.innerHTML = '';
+        const tbl = el('table', { className: 'import-preview-table' });
+        const thead = el('thead', {});
+        thead.appendChild(el('tr', {},
+          el('th', { textContent: 'Date' }),
+          el('th', { textContent: 'Description' }),
+          el('th', { textContent: 'Amount' }),
+        ));
+        const tbody = el('tbody', {});
+        for (const r of dataRows.slice(0, 5)) {
+          const rawAmt = parseCsvAmount(r[Number(amtSel.value)]);
+          const amt    = rawAmt === null ? null : (flipCheck.checked ? -rawAmt : rawAmt);
+          tbody.appendChild(el('tr', {},
+            el('td', { textContent: parseCsvDate(r[Number(dateSel.value)]) || '—' }),
+            el('td', { textContent: (r[Number(descSel.value)] || '').trim() || '—' }),
+            el('td', { textContent: amt === null ? '—' : formatCurrency(amt) }),
+          ));
+        }
+        tbl.append(thead, tbody);
+        preview.append(
+          el('p', { className: 'section-note', textContent: `Preview — first ${Math.min(5, dataRows.length)} of ${dataRows.length} rows` }),
+          tbl,
+        );
+      };
+      [dateSel, descSel, amtSel, flipCheck].forEach(x => x.addEventListener('change', renderPreview));
+      renderPreview();
+
+      const nextBtn = el('button', { className: 'btn-primary', textContent: 'Next: assign categories' });
+      nextBtn.addEventListener('click', () => {
+        renderStep2(Number(dateSel.value), Number(descSel.value), Number(amtSel.value), flipCheck.checked);
+      });
+
+      body.append(mapGrid, flipRow, preview, el('div', { className: 'import-actions' }, nextBtn));
+    }
+
+    // ---- Step 2: category assignment ----
+    function renderStep2(dCol, xCol, aCol, flip) {
+      body.innerHTML = '';
+
+      const parsed = dataRows.map(r => {
+        const rawAmt = parseCsvAmount(r[aCol]);
+        return {
+          date:   parseCsvDate(r[dCol]),
+          note:   (r[xCol] || '').trim(),
+          amount: rawAmt === null ? null : (flip ? -rawAmt : rawAmt),
+        };
+      }).filter(p => p.amount !== null && p.amount !== 0);
+
+      const inMonth  = parsed.filter(p => p.date && p.date.slice(0, 7) === currentMonth);
+      const outMonth = parsed.length - inMonth.length;
+
+      if (inMonth.length === 0) {
+        body.append(
+          el('p', { className: 'import-note', textContent:
+            `None of the ${parsed.length} rows fall in ${currentMonth}. ` +
+            'Switch to the right month (top of the page) and import again.' }),
+          el('div', { className: 'import-actions' },
+            (() => { const b = el('button', { className: 'btn-secondary', textContent: 'Back' });
+                     b.addEventListener('click', renderStep1); return b; })()),
+        );
+        return;
+      }
+
+      const catSelects = [];
+      const tbl   = el('table', { className: 'import-assign-table' });
+      const thead = el('thead', {});
+      thead.appendChild(el('tr', {},
+        el('th', { textContent: '' }),
+        el('th', { textContent: 'Date' }),
+        el('th', { textContent: 'Description' }),
+        el('th', { textContent: 'Amount' }),
+        el('th', { textContent: 'Category' }),
+      ));
+      const tbody = el('tbody', {});
+      for (const p of inMonth) {
+        const check = el('input', { type: 'checkbox' });
+        check.checked = true;
+        const sel = el('select', { className: 'row-subtype import-cat-select' });
+        sel.appendChild(el('option', { value: '', textContent: '— skip —' }));
+        for (const [section, label] of IMPORT_SECTIONS) {
+          const rows = importRowsForSection(section).filter(r => (r.name || '').trim());
+          if (!rows.length) continue;
+          const grp = el('optgroup', { label });
+          for (const r of rows) grp.appendChild(el('option', { value: `${section}:${r.id}`, textContent: r.name }));
+          sel.appendChild(grp);
+        }
+        catSelects.push({ p, check, sel });
+        tbody.appendChild(el('tr', {},
+          el('td', {}, check),
+          el('td', { textContent: p.date }),
+          el('td', { className: 'import-desc', textContent: p.note || '—' }),
+          el('td', { textContent: formatCurrency(p.amount) }),
+          el('td', {}, sel),
+        ));
+      }
+      tbl.append(thead, tbody);
+
+      const backBtn   = el('button', { className: 'btn-secondary', textContent: 'Back' });
+      backBtn.addEventListener('click', renderStep1);
+      const importBtn = el('button', { className: 'btn-primary', textContent: 'Import' });
+      importBtn.addEventListener('click', () => {
+        const picks = catSelects.filter(x => x.check.checked && x.sel.value);
+        if (!picks.length) { showToast('Assign a category to at least one row.'); return; }
+        runCsvImport(picks.map(x => {
+          const [section, rowId] = x.sel.value.split(':');
+          return { section, rowId, amount: x.p.amount, date: x.p.date, note: x.p.note };
+        }));
+      });
+
+      const notes = [];
+      if (outMonth > 0) notes.push(`${outMonth} row${outMonth === 1 ? '' : 's'} dated outside ${currentMonth} not shown — switch months to import them.`);
+      body.append(
+        el('p', { className: 'section-note', textContent: `${inMonth.length} rows in this month. Uncheck rows or leave category as “skip” to leave them out.` }),
+        el('div', { className: 'import-table-wrap' }, tbl),
+        ...notes.map(n => el('p', { className: 'import-note', textContent: n })),
+        el('div', { className: 'import-actions' }, backBtn, importBtn),
+      );
+    }
+
+    renderStep1();
+  }
+
+  function runCsvImport(items) {
+    pushUndo('CSV import');
+    let count = 0;
+    for (const it of items) {
+      const row = findRow(it.section, it.rowId);
+      if (!row) continue;
+      const txn = newTransaction(it.amount, it.date, it.note);
+      if (!Array.isArray(row.transactions)) row.transactions = [];
+      row.transactions.push(txn);
+      bumpRowActual(row, txn.amount);
+      count++;
+      if (row.monthly_entry_id) {
+        withRetry(
+          () => window.puntoApi.insertTransaction({
+            id:               txn.id,
+            monthly_entry_id: row.monthly_entry_id,
+            amount:           txn.amount,
+            description:      txn.note || null,
+            transaction_date: txn.date || null,
+            transaction_type: 'manual',
+          }),
+          (err) => console.warn('CSV import Supabase write failed:', err),
+        );
+      }
+    }
+    saveState();
+    closeImportModal();
+    renderAll();
+    showToast(`Imported ${count} transaction${count === 1 ? '' : 's'}`);
+  }
+
+  function initCsvImport() {
+    const btn  = document.getElementById('import-csv-btn');
+    const file = document.getElementById('import-csv-file');
+    if (!btn || !file) return;
+    btn.addEventListener('click', () => { file.value = ''; file.click(); });
+    file.addEventListener('change', () => {
+      const f = file.files && file.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => openImportModal(parseCSV(String(reader.result || '')));
+      reader.onerror = () => showToast('Could not read that file.');
+      reader.readAsText(f);
+    });
+  }
+
+  // ============================================================
   // SURGICAL CELL UPDATE (after transaction change)
   // ============================================================
   function updateRowCells(rowId, section) {
@@ -4877,6 +5206,7 @@ income:            'Income',
     initSidebar();
     initInvesting();
     initDashboardEmptyState();
+    initCsvImport();
 
     // Re-render when crossing the mobile breakpoint so currency formatting refreshes
     const onBreakpointChange = () => renderAll();
