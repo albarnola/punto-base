@@ -2159,8 +2159,35 @@ income:            'Income',
     if (pretaxSection) pretaxSection.style.display = pretaxRows.length > 0 ? '' : 'none';
   }
 
+  // Per-group subtotals in the unified Expenses card header rows.
+  function renderExpenseGroupSubtotals() {
+    const md = state.months[currentMonth];
+    if (!md) return;
+    const groups = {
+      fixed:        md.categories.fixed        || [],
+      variable:     md.categories.variable     || [],
+      recreational: md.categories.recreational || [],
+    };
+    let actTotal = 0;
+    let expTotal = 0;
+    for (const [key, rows] of Object.entries(groups)) {
+      const act = sumListActual(rows);
+      const exp = sumListExpected(rows);
+      actTotal += act;
+      expTotal += exp;
+      const el = document.getElementById(`${key}-subtotal`);
+      if (el) el.textContent = `${formatCurrency(act)} of ${formatCurrency(exp)}`;
+    }
+    const actEl = document.getElementById('expenses-total-actual');
+    const expEl = document.getElementById('expenses-total-expected');
+    if (actEl) actEl.textContent = formatCurrency(actTotal);
+    if (expEl) expEl.textContent = formatCurrency(expTotal);
+  }
+
   function renderSummary() {
     const sum = computeSummary(state.months[currentMonth]);
+
+    renderExpenseGroupSubtotals();
 
     const incomeEl      = document.getElementById('summary-income');
     const expensesEl    = document.getElementById('summary-expenses');
@@ -2187,6 +2214,13 @@ income:            'Income',
     if (netEl) {
       netEl.textContent = formatCurrency(sum.netActual);
       netEl.className   = sum.netActual >= 0 ? 'positive' : 'negative';
+    }
+
+    const cashflowEl = document.getElementById('summary-cashflow');
+    if (cashflowEl) {
+      const cf = sum.incomeActual - sum.expensesActual;
+      cashflowEl.textContent = formatCurrency(cf);
+      cashflowEl.className    = cf >= 0 ? 'positive' : 'negative';
     }
 
     if (insightEl) {
@@ -2275,6 +2309,33 @@ income:            'Income',
         subtitle = `Your financial summary for ${monthName}`;
       }
       subtitleEl.textContent = subtitle;
+    }
+
+    // Spending breakdown bar (fixed / variable / recreational)
+    const bdEl = document.getElementById('dashboard-breakdown');
+    if (bdEl) {
+      const cats = md.categories;
+      const parts = [
+        ['fixed',        sumListActual(cats.fixed        || [])],
+        ['variable',     sumListActual(cats.variable     || [])],
+        ['recreational', sumListActual(cats.recreational || [])],
+      ];
+      const totalParts = parts.reduce((acc, [, v]) => acc + v, 0);
+      bdEl.hidden = totalParts <= 0;
+      if (totalParts > 0) {
+        for (const [key, val] of parts) {
+          const seg = document.getElementById(`breakdown-seg-${key}`);
+          const amt = document.getElementById(`breakdown-amt-${key}`);
+          const pct = (val / totalParts) * 100;
+          if (seg) {
+            seg.style.width = pct + '%';
+            seg.style.display = val > 0 ? '' : 'none';
+          }
+          if (amt) amt.textContent = `${formatCurrency(val)} · ${Math.round(pct)}%`;
+        }
+        const totalEl = document.getElementById('breakdown-total');
+        if (totalEl) totalEl.textContent = formatCurrency(totalParts);
+      }
     }
   }
 
