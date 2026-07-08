@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=3" />
+  <link rel="stylesheet" href="css/styles.css?v=5" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -112,22 +112,64 @@
 
       <!-- Summary tiles -->
       <section class="dashboard-tiles" aria-label="Monthly financial summary">
-        <div class="dashboard-tile">
+        <div class="dashboard-tile tile--income">
+          <span class="dashboard-tile-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="1" x2="12" y2="23"/>
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+          </span>
           <span class="dashboard-tile-label">Total Income</span>
           <span class="dashboard-tile-value" id="dashboard-income">$0.00</span>
         </div>
-        <div class="dashboard-tile">
+        <div class="dashboard-tile tile--spent">
+          <span class="dashboard-tile-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+              <line x1="1" y1="10" x2="23" y2="10"/>
+            </svg>
+          </span>
           <span class="dashboard-tile-label">Total Spent</span>
           <span class="dashboard-tile-value" id="dashboard-spent">$0.00</span>
         </div>
-        <div class="dashboard-tile">
+        <div class="dashboard-tile tile--saved">
+          <span class="dashboard-tile-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+              <polyline points="17 6 23 6 23 12"/>
+            </svg>
+          </span>
           <span class="dashboard-tile-label">Total Saved</span>
           <span class="dashboard-tile-value" id="dashboard-saved">$0.00</span>
         </div>
-        <div class="dashboard-tile">
+        <div class="dashboard-tile tile--net">
+          <span class="dashboard-tile-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 3h16a2 2 0 0 1 2 2v6a10 10 0 0 1-20 0V5a2 2 0 0 1 2-2z"/>
+              <polyline points="8 10 12 14 16 10"/>
+            </svg>
+          </span>
           <span class="dashboard-tile-label">Net Cash Left</span>
           <span class="dashboard-tile-value" id="dashboard-net">$0.00</span>
         </div>
+      </section>
+
+      <!-- Spending breakdown -->
+      <section class="dashboard-breakdown" id="dashboard-breakdown" aria-labelledby="breakdown-heading" hidden>
+        <div class="dashboard-breakdown-header">
+          <h2 id="breakdown-heading">Spending breakdown</h2>
+          <span class="dashboard-breakdown-total" id="breakdown-total"></span>
+        </div>
+        <div class="breakdown-bar" aria-hidden="true">
+          <div class="breakdown-seg seg--fixed" id="breakdown-seg-fixed"></div>
+          <div class="breakdown-seg seg--variable" id="breakdown-seg-variable"></div>
+          <div class="breakdown-seg seg--recreational" id="breakdown-seg-recreational"></div>
+        </div>
+        <ul class="breakdown-legend" role="list">
+          <li><span class="expense-group-dot dot--fixed" aria-hidden="true"></span>Fixed <span class="legend-amt" id="breakdown-amt-fixed"></span></li>
+          <li><span class="expense-group-dot dot--variable" aria-hidden="true"></span>Variable <span class="legend-amt" id="breakdown-amt-variable"></span></li>
+          <li><span class="expense-group-dot dot--recreational" aria-hidden="true"></span>Recreational <span class="legend-amt" id="breakdown-amt-recreational"></span></li>
+        </ul>
       </section>
 
     </section>
@@ -139,6 +181,12 @@
       <section class="month-picker-section" aria-label="Month selection">
         <label for="month-picker-salary" class="sr-only">Select month</label>
       </section>
+
+      <!-- Heading -->
+      <div class="page-header">
+        <h1 class="page-heading">Salary</h1>
+        <p class="page-subtitle">Your take-home pay, computed from gross</p>
+      </div>
 
       <!-- Apply to future months -->
       <section class="salary-apply-future" aria-label="Apply this month forward">
@@ -213,6 +261,12 @@
         <label for="month-picker" class="sr-only">Select month</label>
         <input type="month" id="month-picker" name="month-picker" />
       </section>
+
+      <!-- Heading -->
+      <div class="page-header">
+        <h1 class="page-heading">Budget</h1>
+        <p class="page-subtitle">Plan your month and track every dollar</p>
+      </div>
 
       <!-- Income Section -->
       <section class="budget-section" aria-labelledby="income-heading">
@@ -292,88 +346,115 @@
         </div>
       </section>
 
-      <!-- Fixed Expenses Section -->
-      <section class="budget-section" aria-labelledby="fixed-heading">
-        <h2 id="fixed-heading">Fixed Expenses</h2>
-        <p class="section-note">Pre-tax deductions are tracked on the Salary tab and are not included here.</p>
-        <div class="table-wrapper">
-          <table aria-labelledby="fixed-heading">
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Expected</th>
-                <th scope="col">Actual</th>
-                <th scope="col">Variance</th>
-                <th scope="col"><span class="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody id="fixed-body">
-              <!-- rows injected by app.js -->
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colspan="5">
-                  <button class="btn-add" data-category="fixed" aria-label="Add fixed expense row">+ Add Row</button>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+      <!-- Expenses Section (Fixed + Variable + Recreational) -->
+      <section class="budget-section budget-section--expenses" aria-labelledby="expenses-heading">
+        <div class="expenses-card-header">
+          <h2 id="expenses-heading">Expenses</h2>
+          <span class="expenses-card-total">
+            <span id="expenses-total-actual">$0.00</span>
+            <span class="expenses-card-total-sep">spent of</span>
+            <span id="expenses-total-expected">$0.00</span>
+            <span class="expenses-card-total-sep">planned</span>
+          </span>
         </div>
-      </section>
 
-      <!-- Variable Expenses Section -->
-      <section class="budget-section" aria-labelledby="variable-heading">
-        <h2 id="variable-heading">Variable Expenses</h2>
-        <div class="table-wrapper">
-          <table aria-labelledby="variable-heading">
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Expected</th>
-                <th scope="col">Actual</th>
-                <th scope="col">Variance</th>
-                <th scope="col"><span class="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody id="variable-body">
-              <!-- rows injected by app.js -->
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colspan="5">
-                  <button class="btn-add" data-category="variable" aria-label="Add variable expense row">+ Add Row</button>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+        <!-- Fixed group -->
+        <div class="expense-group" data-group="fixed">
+          <div class="expense-group-header">
+            <span class="expense-group-dot dot--fixed" aria-hidden="true"></span>
+            <h3 class="expense-group-title" id="fixed-heading">Fixed</h3>
+            <span class="expense-group-hint">Rent, utilities, subscriptions — pre-tax deductions live on the Salary tab</span>
+            <span class="expense-group-subtotal" id="fixed-subtotal"></span>
+          </div>
+          <div class="table-wrapper">
+            <table aria-labelledby="fixed-heading">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Expected</th>
+                  <th scope="col">Actual</th>
+                  <th scope="col">Variance</th>
+                  <th scope="col"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody id="fixed-body">
+                <!-- rows injected by app.js -->
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="5">
+                    <button class="btn-add" data-category="fixed" aria-label="Add fixed expense row">+ Add Row</button>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </div>
-      </section>
 
-      <!-- Recreational Expenses Section -->
-      <section class="budget-section" aria-labelledby="recreational-heading">
-        <h2 id="recreational-heading">Recreational Expenses</h2>
-        <div class="table-wrapper">
-          <table aria-labelledby="recreational-heading">
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Expected</th>
-                <th scope="col">Actual</th>
-                <th scope="col">Variance</th>
-                <th scope="col"><span class="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody id="recreational-body">
-              <!-- rows injected by app.js -->
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colspan="5">
-                  <button class="btn-add" data-category="recreational" aria-label="Add recreational expense row">+ Add Row</button>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+        <!-- Variable group -->
+        <div class="expense-group expense-group--follower" data-group="variable">
+          <div class="expense-group-header">
+            <span class="expense-group-dot dot--variable" aria-hidden="true"></span>
+            <h3 class="expense-group-title" id="variable-heading">Variable</h3>
+            <span class="expense-group-hint">Groceries, gas, everyday costs</span>
+            <span class="expense-group-subtotal" id="variable-subtotal"></span>
+          </div>
+          <div class="table-wrapper">
+            <table aria-labelledby="variable-heading">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Expected</th>
+                  <th scope="col">Actual</th>
+                  <th scope="col">Variance</th>
+                  <th scope="col"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody id="variable-body">
+                <!-- rows injected by app.js -->
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="5">
+                    <button class="btn-add" data-category="variable" aria-label="Add variable expense row">+ Add Row</button>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
+        <!-- Recreational group -->
+        <div class="expense-group expense-group--follower" data-group="recreational">
+          <div class="expense-group-header">
+            <span class="expense-group-dot dot--recreational" aria-hidden="true"></span>
+            <h3 class="expense-group-title" id="recreational-heading">Recreational</h3>
+            <span class="expense-group-hint">Dining out, entertainment, hobbies</span>
+            <span class="expense-group-subtotal" id="recreational-subtotal"></span>
+          </div>
+          <div class="table-wrapper">
+            <table aria-labelledby="recreational-heading">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Expected</th>
+                  <th scope="col">Actual</th>
+                  <th scope="col">Variance</th>
+                  <th scope="col"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody id="recreational-body">
+                <!-- rows injected by app.js -->
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="5">
+                    <button class="btn-add" data-category="recreational" aria-label="Add recreational expense row">+ Add Row</button>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -392,7 +473,7 @@
             <dt>Total Expenses</dt>
             <dd id="summary-expenses">$0.00</dd>
           </div>
-          <div class="summary-item">
+          <div class="summary-item summary-item--em">
             <dt>Unallocated</dt>
             <dd id="summary-unallocated">$0.00</dd>
             <dd class="summary-insight" id="summary-insight"></dd>
@@ -405,7 +486,7 @@
             <dt>Investments</dt>
             <dd id="summary-investments">$0.00</dd>
           </div>
-          <div class="summary-item">
+          <div class="summary-item summary-item--em">
             <dt>Net</dt>
             <dd id="summary-net">$0.00</dd>
           </div>
@@ -480,6 +561,6 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=3"></script>
+<script src="js/app.js?v=4"></script>
 </body>
 </html>

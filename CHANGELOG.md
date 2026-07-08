@@ -2,6 +2,27 @@
 
 All notable changes to Punto Base will be documented in this file.
 
+## v0.3 — 2026-07-08
+
+### Changed — Apple-style visual language
+- System font stack (SF Pro on Apple devices), tighter letter-spacing on headings
+- Softer palette: #F5F5F7 background, hairline borders, layered soft shadows on all cards
+- Frosted-glass header and summary bar (backdrop blur + saturate)
+- Pill-shaped buttons and month picker with press-down scale feedback
+- Sidebar nav as rounded pill items with tinted active state
+- Card headings no longer uppercase; larger page/dashboard headings
+
+### Changed — visual redesign
+- Fixed, Variable, and Recreational expenses unified into a single "Expenses" card with color-coded sub-groups, per-group subtotals, and a card-level spent-vs-planned total
+- Dashboard tiles redesigned with icons, accent colors, and hover lift
+- New dashboard "Spending breakdown" card: proportional bar of Fixed / Variable / Recreational spending with legend
+- Bottom summary bar redesigned: gradient accent line, dividers between items, emphasized Unallocated and Net values, frosted-glass background
+- Page headers added to Budget and Salary pages
+- Softer app background, active sidebar item accent bar, month picker polish
+
+### Notes
+- No functional changes — all row editing, transactions, linked rows, and sync behavior untouched
+
 ## v0.2 — 2026-04-30
 
 ### Added
