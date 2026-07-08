@@ -2341,9 +2341,18 @@ income:            'Income',
     const md  = state.months[currentMonth];
     const sum = computeSummary(md);
 
+    // TOTAL INCOME — hybrid basis: past months use actual income received
+    // (falling back to the projection when no actuals were logged); the
+    // current and future months keep the full-month projection so Net Cash
+    // Left stays a useful end-of-month forecast.
+    const realMonthKey = toMonthKey(new Date());
+    const isPastMonth  = currentMonth < realMonthKey;
+    const projected    = sum.incomeExpected;
+    const received     = sum.incomeActual;
+    const totalIncome  = (isPastMonth && received > 0) ? received : projected;
+
     // TOTAL SAVED combines post-tax + pre-tax (the existing summary's
     // savings + investments tiles already split this the same way).
-    const totalIncome = sum.incomeExpected;
     const totalSpent  = sum.expensesActual;
     const totalSaved  = sum.savingsActual + sum.investmentsActual;
 
@@ -2355,6 +2364,22 @@ income:            'Income',
 
     headingEl.textContent = `${monthName} at a glance`;
     incomeEl.textContent  = formatCurrency(totalIncome);
+
+    // Income tile sub-line: current month shows what's actually landed so
+    // far; past months note the projection when actuals replaced it.
+    const incomeSubEl = document.getElementById('dashboard-income-sub');
+    if (incomeSubEl) {
+      const differs = Math.round(received * 100) !== Math.round(projected * 100);
+      if (currentMonth === realMonthKey && received > 0 && differs) {
+        incomeSubEl.textContent = `${formatCurrency(received)} received so far`;
+        incomeSubEl.hidden = false;
+      } else if (isPastMonth && received > 0 && differs) {
+        incomeSubEl.textContent = `vs ${formatCurrency(projected)} projected`;
+        incomeSubEl.hidden = false;
+      } else {
+        incomeSubEl.hidden = true;
+      }
+    }
     spentEl.textContent   = formatCurrency(totalSpent);
     savedEl.textContent   = formatCurrency(totalSaved);
     netEl.textContent     = formatCurrency(netRounded);

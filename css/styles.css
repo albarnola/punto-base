@@ -1603,6 +1603,13 @@ tfoot td {
   word-break: break-word;
 }
 
+.dashboard-tile-sub {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+.dashboard-tile-sub[hidden] { display: none; }
+
 #dashboard-net.positive { color: var(--color-positive); }
 #dashboard-net.negative { color: var(--color-negative); }
 #dashboard-net.neutral  { color: var(--color-text-muted); }
