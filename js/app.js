@@ -833,6 +833,9 @@ income:            'Income',
     const md = state.months?.[monthKey];
     if (!md) return;
     if (!window.puntoApi || typeof window.puntoApi.getMonthlyEntries !== 'function') return;
+    // Only seed the current or future months — browsing back to an old empty
+    // month shouldn't fabricate budget history.
+    if (monthKey < toMonthKey(new Date())) return;
 
     let [y, m] = monthKey.split('-').map(Number);
     for (let hop = 0; hop < 12; hop++) {
