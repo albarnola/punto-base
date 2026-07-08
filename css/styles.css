@@ -1754,6 +1754,33 @@ tfoot td {
 
 .dot--income { background: rgb(63 160 132 / .3); }
 
+/* ---- Investing page ---- */
+.trend-bar--portfolio {
+  width: 24px;
+  background: rgb(63 160 132 / .35);
+}
+
+.trend-col--current .trend-bar--portfolio {
+  background: var(--color-brand);
+}
+
+.invest-accounts-hint {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin: calc(-1 * var(--space-2)) 0 var(--space-3);
+}
+
+.invest-empty {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.invest-type {
+  max-width: 130px;
+}
+
 /* ---- Safe to spend ---- */
 .dashboard-safespend {
   display: flex;
