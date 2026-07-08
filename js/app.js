@@ -2202,6 +2202,18 @@ income:            'Income',
       }
     }
 
+    if (sorted.length === 0 && section !== 'pretaxInvestments') {
+      const tr = el('tr', {});
+      const td = el('td', {
+        colSpan: '5',
+        className: 'table-empty',
+        textContent: 'No rows yet — use “+ Add” below to create one.',
+      });
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
     for (let i = 0; i < sorted.length; i++) {
       const row = sorted[i];
       const isFirst = i === firstReorderableIdx;
@@ -2363,6 +2375,16 @@ income:            'Income',
     const netRounded = Math.round(netCash * 100) / 100;
 
     headingEl.textContent = `${monthName} at a glance`;
+
+    // Empty state: no income, spending, or savings anywhere in the month.
+    const isEmptyMonth = projected === 0 && received === 0 &&
+                         totalSpent === 0 && totalSaved === 0;
+    const emptyEl = document.getElementById('dashboard-empty');
+    const tilesEl = document.getElementById('dashboard-tiles');
+    if (emptyEl) emptyEl.hidden = !isEmptyMonth;
+    if (tilesEl) tilesEl.hidden = isEmptyMonth;
+    if (subtitleEl) subtitleEl.hidden = isEmptyMonth;
+
     incomeEl.textContent  = formatCurrency(totalIncome);
 
     // Income tile sub-line: current month shows what's actually landed so
@@ -2802,11 +2824,17 @@ income:            'Income',
 
     if (investing.accounts.length === 0) {
       const tr = el('tr', { className: 'invest-empty-row' });
-      const td = el('td', {
-        colSpan: '4',
-        className: 'invest-empty',
-        textContent: 'No accounts yet — add your 401(k), Roth IRA, or brokerage to start tracking.',
+      const td = el('td', { colSpan: '4', className: 'invest-empty' });
+      td.appendChild(el('p', {
+        textContent: 'No accounts yet — track your 401(k), Roth IRA, or brokerage here.',
+      }));
+      const btn = el('button', {
+        type: 'button',
+        className: 'btn-primary',
+        textContent: '+ Add your first account',
       });
+      btn.addEventListener('click', () => investAddAccount());
+      td.appendChild(btn);
       tr.appendChild(td);
       body.appendChild(tr);
       return;
@@ -2918,6 +2946,13 @@ income:            'Income',
   function initInvesting() {
     document.getElementById('invest-add-account')
       ?.addEventListener('click', () => investAddAccount());
+  }
+
+  function initDashboardEmptyState() {
+    document.getElementById('empty-goto-salary')
+      ?.addEventListener('click', () => showPage('salary'));
+    document.getElementById('empty-goto-budget')
+      ?.addEventListener('click', () => showPage('budget'));
   }
 
   // ============================================================
@@ -4838,6 +4873,7 @@ income:            'Income',
     initNav();
     initSidebar();
     initInvesting();
+    initDashboardEmptyState();
 
     // Re-render when crossing the mobile breakpoint so currency formatting refreshes
     const onBreakpointChange = () => renderAll();

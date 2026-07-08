@@ -7,8 +7,8 @@ const CACHE_VERSION = 'punto-base-v1';
 const SHELL = [
   './',
   './index.html',
-  './css/styles.css?v=12',
-  './js/app.js?v=12',
+  './css/styles.css?v=13',
+  './js/app.js?v=13',
   './js/api.js?v=4',
   './js/auth.js?v=3',
   './js/supabase-client.js?v=3',
