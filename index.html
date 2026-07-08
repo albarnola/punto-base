@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=6" />
+  <link rel="stylesheet" href="css/styles.css?v=7" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -484,37 +484,41 @@
 
       <!-- Summary Bar (budget-page only) -->
       <aside class="summary-bar" role="complementary" aria-label="Budget summary">
-        <dl class="summary-grid">
-          <div class="summary-item">
-            <dt>Income</dt>
-            <dd id="summary-income">$0.00</dd>
+        <div class="summary-inner">
+          <div class="summary-headline">
+            <span class="summary-headline-value" id="summary-unallocated">$0.00</span>
+            <div class="summary-headline-copy">
+              <span class="summary-headline-label">Left to budget</span>
+              <span class="summary-insight" id="summary-insight"></span>
+            </div>
           </div>
-          <div class="summary-item">
-            <dt>Expenses</dt>
-            <dd id="summary-expenses">$0.00</dd>
-          </div>
-          <div class="summary-item summary-item--em">
-            <dt>Unallocated</dt>
-            <dd id="summary-unallocated">$0.00</dd>
-            <dd class="summary-insight" id="summary-insight"></dd>
-          </div>
-          <div class="summary-item">
-            <dt>Savings</dt>
-            <dd id="summary-savings">$0.00</dd>
-          </div>
-          <div class="summary-item">
-            <dt>Investments</dt>
-            <dd id="summary-investments">$0.00</dd>
-          </div>
-          <div class="summary-item summary-item--em">
-            <dt>Net</dt>
-            <dd id="summary-net">$0.00</dd>
-          </div>
-          <div class="summary-item">
-            <dt>Cash Flow</dt>
-            <dd id="summary-cashflow">$0.00</dd>
-          </div>
-        </dl>
+          <dl class="summary-details">
+            <div class="summary-item">
+              <dt>Income</dt>
+              <dd id="summary-income">$0.00</dd>
+            </div>
+            <div class="summary-item">
+              <dt>Expenses</dt>
+              <dd id="summary-expenses">$0.00</dd>
+            </div>
+            <div class="summary-item">
+              <dt>Savings</dt>
+              <dd id="summary-savings">$0.00</dd>
+            </div>
+            <div class="summary-item">
+              <dt>Investments</dt>
+              <dd id="summary-investments">$0.00</dd>
+            </div>
+            <div class="summary-item">
+              <dt>Net</dt>
+              <dd id="summary-net">$0.00</dd>
+            </div>
+            <div class="summary-item">
+              <dt>Cash Flow</dt>
+              <dd id="summary-cashflow">$0.00</dd>
+            </div>
+          </dl>
+        </div>
       </aside>
 
     </section>
