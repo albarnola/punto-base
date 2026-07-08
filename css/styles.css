@@ -1236,10 +1236,18 @@ tfoot td {
 
 #page-budget,
 #page-salary,
-#page-dashboard {
+#page-dashboard,
+#page-investing {
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
+}
+
+/* The hidden attribute must beat display:flex on toggleable cards */
+.dashboard-safespend[hidden],
+.dashboard-breakdown[hidden],
+.dashboard-trends[hidden] {
+  display: none !important;
 }
 
 /* ============================================================
@@ -1762,12 +1770,6 @@ tfoot td {
 
 .trend-col--current .trend-bar--portfolio {
   background: var(--color-brand);
-}
-
-.invest-accounts-hint {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
-  margin: calc(-1 * var(--space-2)) 0 var(--space-3);
 }
 
 .invest-empty {
