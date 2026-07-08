@@ -2386,6 +2386,12 @@ income:            'Income',
     netEl.className = 'dashboard-tile-value ' +
       (netRounded > 0 ? 'positive' : netRounded < 0 ? 'negative' : 'neutral');
 
+    // Past months show settled cash; current/future months are a forecast.
+    const netLabelEl = document.getElementById('dashboard-net-label');
+    if (netLabelEl) {
+      netLabelEl.textContent = isPastMonth ? 'Net Cash Left' : 'Expected Cash Left';
+    }
+
     if (subtitleEl) {
       const unallocatedRounded = Math.round(sum.unallocated * 100) / 100;
       const savingsRate = totalIncome > 0 ? totalSaved / totalIncome : 0;
