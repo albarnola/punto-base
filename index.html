@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=11" />
+  <link rel="stylesheet" href="css/styles.css?v=12" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -137,6 +137,7 @@
           </span>
           <span class="dashboard-tile-label">Total Income</span>
           <span class="dashboard-tile-value" id="dashboard-income">$0.00</span>
+          <span class="dashboard-tile-sub" id="dashboard-income-sub" hidden></span>
         </div>
         <div class="dashboard-tile tile--spent">
           <span class="dashboard-tile-icon" aria-hidden="true">
@@ -696,6 +697,6 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=10"></script>
+<script src="js/app.js?v=11"></script>
 </body>
 </html>
