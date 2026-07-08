@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=5" />
+  <link rel="stylesheet" href="css/styles.css?v=6" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -151,6 +151,26 @@
           </span>
           <span class="dashboard-tile-label">Net Cash Left</span>
           <span class="dashboard-tile-value" id="dashboard-net">$0.00</span>
+        </div>
+      </section>
+
+      <!-- Safe to spend -->
+      <section class="dashboard-safespend" id="dashboard-safespend" aria-labelledby="safespend-heading" hidden>
+        <span class="safespend-icon" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+            <line x1="16" y1="2" x2="16" y2="6"/>
+            <line x1="8" y1="2" x2="8" y2="6"/>
+            <line x1="3" y1="10" x2="21" y2="10"/>
+          </svg>
+        </span>
+        <div class="safespend-copy">
+          <h2 id="safespend-heading">Safe to spend</h2>
+          <p class="safespend-note" id="safespend-note"></p>
+        </div>
+        <div class="safespend-figure">
+          <span class="safespend-value" id="safespend-value">$0</span>
+          <span class="safespend-per">/ day</span>
         </div>
       </section>
 
@@ -466,11 +486,11 @@
       <aside class="summary-bar" role="complementary" aria-label="Budget summary">
         <dl class="summary-grid">
           <div class="summary-item">
-            <dt>Total Income</dt>
+            <dt>Income</dt>
             <dd id="summary-income">$0.00</dd>
           </div>
           <div class="summary-item">
-            <dt>Total Expenses</dt>
+            <dt>Expenses</dt>
             <dd id="summary-expenses">$0.00</dd>
           </div>
           <div class="summary-item summary-item--em">
@@ -491,7 +511,7 @@
             <dd id="summary-net">$0.00</dd>
           </div>
           <div class="summary-item">
-            <dt>Real Cash Flow</dt>
+            <dt>Cash Flow</dt>
             <dd id="summary-cashflow">$0.00</dd>
           </div>
         </dl>
@@ -561,6 +581,6 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=4"></script>
+<script src="js/app.js?v=6"></script>
 </body>
 </html>
