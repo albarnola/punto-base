@@ -5,6 +5,7 @@ All notable changes to Punto Base will be documented in this file.
 ## v0.4 — 2026-07-08
 
 ### Added
+- CSV import: "Import CSV" button on the Budget page — upload a bank/card export, map date/description/amount columns (auto-detected), flip signs if money out is negative, assign each row to a budget category, and bulk-add transactions to the selected month
 - PWA support: manifest + service worker — install to home screen (teal icon), app shell loads offline; Supabase data is never cached
 - Link previews: Open Graph / Twitter meta tags with a teal logo card when sharing the site link (WhatsApp, iMessage, social)
 - Empty states: dashboard shows a friendly card with "Set up Salary" / "Go to Budget" when a month has no data; empty budget sections hint at "+ Add"; Investing gets an "Add your first account" button

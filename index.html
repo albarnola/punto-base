@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=13" />
+  <link rel="stylesheet" href="css/styles.css?v=14" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -337,9 +337,13 @@
       </section>
 
       <!-- Heading -->
-      <div class="page-header">
-        <h1 class="page-heading">Budget</h1>
-        <p class="page-subtitle">Plan your month and track every dollar</p>
+      <div class="page-header page-header--row">
+        <div>
+          <h1 class="page-heading">Budget</h1>
+          <p class="page-subtitle">Plan your month and track every dollar</p>
+        </div>
+        <button type="button" class="btn-secondary" id="import-csv-btn">Import CSV</button>
+        <input type="file" id="import-csv-file" accept=".csv,text/csv" hidden />
       </div>
 
       <!-- Income Section -->
@@ -719,7 +723,7 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=13"></script>
+<script src="js/app.js?v=14"></script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
