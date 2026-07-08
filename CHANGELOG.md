@@ -2,6 +2,14 @@
 
 All notable changes to Punto Base will be documented in this file.
 
+## v0.4 — 2026-07-08
+
+### Added
+- Dashboard "Safe to spend" card: remaining flexible budget (Variable + Recreational) divided by days left in the month; shows over-budget state in red; only appears when viewing the current calendar month
+
+### Changed
+- Summary bar cleanup: dividers removed, sentence-case labels, shortened labels (Income, Expenses, Cash Flow), softer emphasis sizing
+
 ## v0.3 — 2026-07-08
 
 ### Changed — Apple-style visual language

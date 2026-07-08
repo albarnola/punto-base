@@ -2311,6 +2311,36 @@ income:            'Income',
       subtitleEl.textContent = subtitle;
     }
 
+    // Safe to spend: remaining flexible budget (Variable + Recreational)
+    // divided by days left. Only meaningful for the current calendar month.
+    const ssEl = document.getElementById('dashboard-safespend');
+    if (ssEl) {
+      const now    = new Date();
+      const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const flexExpected = sumListExpected(md.categories.variable || []) +
+                           sumListExpected(md.categories.recreational || []);
+      if (nowKey !== currentMonth || flexExpected <= 0) {
+        ssEl.hidden = true;
+      } else {
+        const flexActual = sumListActual(md.categories.variable || []) +
+                           sumListActual(md.categories.recreational || []);
+        const remaining   = flexExpected - flexActual;
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const daysLeft    = daysInMonth - now.getDate() + 1; // includes today
+        const perDay      = Math.max(0, remaining) / daysLeft;
+        const valueEl = document.getElementById('safespend-value');
+        const noteEl  = document.getElementById('safespend-note');
+        ssEl.hidden = false;
+        ssEl.classList.toggle('safespend--over', remaining < 0);
+        if (valueEl) valueEl.textContent = formatCurrency(perDay);
+        if (noteEl) {
+          noteEl.textContent = remaining < 0
+            ? `${formatCurrency(Math.abs(remaining))} over your flexible budget this month`
+            : `${formatCurrency(remaining)} of flexible spending left · ${daysLeft} day${daysLeft === 1 ? '' : 's'} to go`;
+        }
+      }
+    }
+
     // Spending breakdown bar (fixed / variable / recreational)
     const bdEl = document.getElementById('dashboard-breakdown');
     if (bdEl) {
