@@ -5,6 +5,7 @@ All notable changes to Punto Base will be documented in this file.
 ## v0.4 — 2026-07-08
 
 ### Added
+- Recurring rows: opening a month with no data auto-fills expected values from the nearest prior month with a budget (actuals start at zero); a toast confirms "Budget carried over from …"
 - Dashboard "Safe to spend" card: remaining flexible budget (Variable + Recreational) divided by days left in the month; shows over-budget state in red; only appears when viewing the current calendar month
 
 ### Changed
