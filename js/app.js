@@ -2398,7 +2398,9 @@ income:            'Income',
 
     const cashflowEl = document.getElementById('summary-cashflow');
     if (cashflowEl) {
-      const cf = sum.incomeActual - sum.expensesActual;
+      // Savings stays out (transfer between own accounts), but debt payments
+      // are cash leaving your pocket — subtract them.
+      const cf = sum.incomeActual - sum.expensesActual - sum.debtActual;
       cashflowEl.textContent = formatCurrency(cf);
       cashflowEl.className    = cf >= 0 ? 'positive' : 'negative';
     }
