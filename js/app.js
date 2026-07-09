@@ -227,6 +227,7 @@ income:            'Income',
           variable:          copyRows(priorMonth.categories.variable),
           recreational:      copyRows(priorMonth.categories.recreational),
           savings:           copyRows(priorMonth.categories.savings || []),
+          debt:              copyRows(priorMonth.categories.debt || []),
           pretaxInvestments: [],
         },
       };
@@ -238,6 +239,7 @@ income:            'Income',
         variable:          DEFAULTS.variable.map((d, i) => newRow(d.name, 0, i)),
         recreational:      DEFAULTS.recreational.map((d, i) => newRow(d.name, 0, i)),
         savings:           DEFAULTS.savings.map((d, i) => newRow(d.name, 0, i)),
+        debt:              [],
         pretaxInvestments: [],
       },
     };
@@ -278,6 +280,9 @@ income:            'Income',
       }
       if (md.categories && !md.categories.pretaxInvestments) {
         md.categories.pretaxInvestments = [];
+      }
+      if (md.categories && !md.categories.debt) {
+        md.categories.debt = [];
       }
       for (const list of Object.values(md.categories || {})) {
         (list || []).forEach(r => migrateRow(r, monthKey));
@@ -664,6 +669,7 @@ income:            'Income',
     variable:           'variable',
     recreational:       'recreational',
     savings:            'savings',
+    debt:               'debt',
     pretax_investments: 'pretaxInvestments',
   };
 
@@ -688,6 +694,7 @@ income:            'Income',
       variable:          [],
       recreational:      [],
       savings:           [],
+      debt:              [],
       pretaxInvestments: [],
     };
     const sorted = (rows || []).slice().sort((a, b) =>
@@ -1469,6 +1476,7 @@ income:            'Income',
     const variableRows     = cats.variable          || [];
     const recreationalRows = cats.recreational      || [];
     const savRows          = cats.savings           || [];
+    const debtRows         = cats.debt              || [];
     const pretaxRows       = cats.pretaxInvestments || [];
 
     // Savings & Investments and the expense sections are post-tax only now —
@@ -1477,11 +1485,13 @@ income:            'Income',
     const variableExp     = sumListExpected(variableRows);
     const recreationalExp = sumListExpected(recreationalRows);
     const savExp          = sumListExpected(savRows);
+    const debtExp         = sumListExpected(debtRows);
 
     const fixedAct        = sumListActual(fixedRows);
     const variableAct     = sumListActual(variableRows);
     const recreationalAct = sumListActual(recreationalRows);
     const savAct          = sumListActual(savRows);
+    const debtAct         = sumListActual(debtRows);
 
     // SAVINGS / INVESTMENTS subtype-based actual sums (Savings & Investments).
     // Per-row, prefer row.actual when set by the API; otherwise sum transactions.
@@ -1502,7 +1512,9 @@ income:            'Income',
 
     const expensesExp = fixedExp + variableExp + recreationalExp;
     const expensesAct = fixedAct + variableAct + recreationalAct;
-    const allocatedExp = expensesExp + savExp;
+    // Debt paydown allocates income (zero-based budgeting) but is tracked
+    // separately from expenses — like savings, it's balance-sheet money.
+    const allocatedExp = expensesExp + savExp + debtExp;
 
     // UNALLOCATED — Take-Home (or manual income fallback) minus all post-tax
     // expected. Pre-Tax Investments are NOT subtracted: that money is already
@@ -1513,7 +1525,7 @@ income:            'Income',
 
     // NET — Take-Home (or manual income fallback) minus post-tax actuals.
     // Pre-Tax Investments are NOT subtracted (already in take-home).
-    const netActual = incomeBasis - expensesAct - savAct;
+    const netActual = incomeBasis - expensesAct - savAct - debtAct;
 
     return {
       incomeExpected:     incomeExp,
@@ -1525,6 +1537,8 @@ income:            'Income',
       savingsExpectedAll: savExp,
       savingsActual:      savingsActSubtype,                  // SAVINGS tile
       investmentsActual:  investmentsActSubtype + pretaxAct,  // INVESTMENTS tile (post-tax + pre-tax)
+      debtExpected:       debtExp,
+      debtActual:         debtAct,
       allocatedExpected:  allocatedExp,
       unallocated:        unallocated,
       netExpected:        incomeExp - allocatedExp,
@@ -1618,6 +1632,7 @@ income:            'Income',
     if (!md.categories) md.categories = {};
     if (!md.categories.savings)           md.categories.savings           = [];
     if (!md.categories.fixed)             md.categories.fixed             = [];
+    if (!md.categories.debt)              md.categories.debt              = [];
     if (!md.categories.pretaxInvestments) md.categories.pretaxInvestments = [];
 
     const allDeductions = isSalaryActive(monthKey)
@@ -1729,7 +1744,7 @@ income:            'Income',
     const diff = actual - expected;
     if (diff === 0) return { text: formatCurrency(0), className: 'variance-neutral' };
     const isOver     = diff > 0;
-    const overIsGood = section === 'income' || section === 'savings';
+    const overIsGood = section === 'income' || section === 'savings' || section === 'debt';
     const className  = (overIsGood === isOver) ? 'variance-good' : 'variance-bad';
     const magnitude  = formatCurrency(Math.abs(diff));
     const text       = isOver ? magnitude : `(${magnitude})`;
@@ -2207,11 +2222,22 @@ income:            'Income',
 
     if (sorted.length === 0 && section !== 'pretaxInvestments') {
       const tr = el('tr', {});
-      const td = el('td', {
-        colSpan: '5',
-        className: 'table-empty',
-        textContent: 'No rows yet — use “+ Add” below to create one.',
-      });
+      const td = el('td', { colSpan: '5', className: 'table-empty' });
+      const debtAccounts = section === 'debt' ? getDebtAccounts() : [];
+      if (debtAccounts.length > 0) {
+        td.appendChild(el('span', {
+          textContent: 'Plan payments toward the debt on your Net Worth page. ',
+        }));
+        const seedBtn = el('button', {
+          type: 'button',
+          className: 'btn-link',
+          textContent: `+ Add ${debtAccounts.length === 1 ? 'a row' : 'rows'} from your debt account${debtAccounts.length === 1 ? '' : 's'}`,
+        });
+        seedBtn.addEventListener('click', () => debtSeedRowsFromAccounts());
+        td.appendChild(seedBtn);
+      } else {
+        td.textContent = 'No rows yet — use “+ Add” below to create one.';
+      }
       tr.appendChild(td);
       tbody.appendChild(tr);
       return;
@@ -2228,6 +2254,53 @@ income:            'Income',
     }
   }
 
+  // ---- Debt Paydown helpers ----
+  function getDebtAccounts() {
+    return (investing?.accounts || []).filter(a => a.account_type === 'debt');
+  }
+
+  // Create one budget row per Net Worth debt account (skipping any account
+  // whose name already has a row). Rows are plain budget rows — the account
+  // is only used to prefill the name.
+  function debtSeedRowsFromAccounts() {
+    const list = getRowList('debt');
+    const accounts = getDebtAccounts().filter(acc => {
+      const name = (acc.name || '').trim().toLowerCase();
+      return name && !list.some(r => (r.name || '').trim().toLowerCase() === name);
+    });
+    if (accounts.length === 0) { showToast('Those accounts already have rows'); return; }
+    pushUndo('add debt paydown rows');
+    let nextOrder = list.reduce((max, r) => Math.max(max, r.order ?? 0), -1) + 1;
+    for (const acc of accounts) {
+      const row = newRow(acc.name, 0, nextOrder++);
+      list.push(row);
+      withRetry(
+        async () => {
+          const result = await window.puntoApi.insertBudgetCategory({
+            id:                  row.id,
+            name:                row.name,
+            section:             'debt',
+            subtype:             null,
+            sort_order:          row.order ?? 0,
+            is_linked:           false,
+            linked_deduction_id: null,
+          });
+          if (result && result.success) await ensureMonthlyEntriesExist(currentMonth);
+          return result;
+        },
+        (err) => {
+          console.warn(`Debt seed: insertBudgetCategory failed for row ${row.id}:`, err);
+          const idx = list.findIndex(r => r.id === row.id);
+          if (idx !== -1) list.splice(idx, 1);
+          renderAll();
+          debouncedSave();
+        }
+      );
+    }
+    renderAll();
+    debouncedSave();
+  }
+
   function renderAllTables() {
     const md = state.months[currentMonth];
     const pretaxRows = md.categories.pretaxInvestments || [];
@@ -2237,9 +2310,27 @@ income:            'Income',
     renderTable('variable-body',           md.categories.variable,        'variable');
     renderTable('recreational-body',       md.categories.recreational,    'recreational');
     renderTable('savings-body',            md.categories.savings || [],   'savings');
+    refreshDebtSection();
 
     const pretaxSection = document.getElementById('pretax-investments-section');
     if (pretaxSection) pretaxSection.style.display = pretaxRows.length > 0 ? '' : 'none';
+  }
+
+  // Debt Paydown visibility: show the section when the month has debt rows
+  // or Net Worth has debt accounts; otherwise show only the quiet
+  // "+ Add debt paydown" entry line (which creates the first row).
+  // Also called from renderInvesting() so adding/removing a debt account on
+  // the Net Worth page updates the Budget page immediately.
+  function refreshDebtSection() {
+    const md = state.months[currentMonth];
+    if (!md) return;
+    const debtRows = md.categories.debt || [];
+    renderTable('debt-body', debtRows, 'debt');
+    const showDebt    = debtRows.length > 0 || getDebtAccounts().length > 0;
+    const debtSection = document.getElementById('debt-section');
+    const debtEntry   = document.getElementById('debt-entry');
+    if (debtSection) debtSection.hidden = !showDebt;
+    if (debtEntry)   debtEntry.hidden   = showDebt;
   }
 
   // Per-group subtotals in the unified Expenses card header rows.
@@ -2293,6 +2384,12 @@ income:            'Income',
 
     if (savingsEl)     savingsEl.textContent     = formatCurrency(sum.savingsActual);
     if (investmentsEl) investmentsEl.textContent = formatCurrency(sum.investmentsActual);
+
+    // Debt paydown item only appears when the month plans or logs debt payments.
+    const debtItemEl = document.getElementById('summary-debt-item');
+    const debtEl     = document.getElementById('summary-debt');
+    if (debtItemEl) debtItemEl.hidden = sum.debtExpected === 0 && sum.debtActual === 0;
+    if (debtEl) debtEl.textContent = formatCurrency(sum.debtActual);
 
     if (netEl) {
       netEl.textContent = formatCurrency(sum.netActual);
@@ -2374,14 +2471,15 @@ income:            'Income',
     // NET CASH LEFT subtracts only post-tax savings — pre-tax was never
     // in the take-home pool to begin with.
     const postTaxSavingsAct = sumListActual(md.categories.savings || []);
-    const netCash = totalIncome - totalSpent - postTaxSavingsAct;
+    const netCash = totalIncome - totalSpent - postTaxSavingsAct - sum.debtActual;
     const netRounded = Math.round(netCash * 100) / 100;
 
     headingEl.textContent = `${monthName} at a glance`;
 
     // Empty state: no income, spending, or savings anywhere in the month.
     const isEmptyMonth = projected === 0 && received === 0 &&
-                         totalSpent === 0 && totalSaved === 0;
+                         totalSpent === 0 && totalSaved === 0 &&
+                         sum.debtExpected === 0 && sum.debtActual === 0;
     const emptyEl = document.getElementById('dashboard-empty');
     const tilesEl = document.getElementById('dashboard-tiles');
     if (emptyEl) emptyEl.hidden = !isEmptyMonth;
@@ -2963,12 +3061,14 @@ income:            'Income',
     renderInvestingTiles();
     renderInvestingChart();
     renderInvestingAccounts();
+    refreshDebtSection();   // Budget's Debt Paydown visibility tracks debt accounts
     ensureInvestingData().then(() => {
       if (investingHydrated && !renderInvesting._repainted) {
         renderInvesting._repainted = true;
         renderInvestingTiles();
         renderInvestingChart();
         renderInvestingAccounts();
+        refreshDebtSection();
       }
     });
   }
@@ -3050,6 +3150,7 @@ income:            'Income',
     ['variable',     'Variable'],
     ['recreational', 'Recreational'],
     ['savings',      'Savings & Investments'],
+    ['debt',         'Debt Paydown'],
   ];
 
   function importRowsForSection(section) {
@@ -4235,6 +4336,7 @@ income:            'Income',
     md.categories.variable     = copyRows(prevMd.categories?.variable);
     md.categories.recreational = copyRows(prevMd.categories?.recreational);
     md.categories.savings      = copyRows(prevMd.categories?.savings);
+    md.categories.debt         = copyRows(prevMd.categories?.debt);
 
     expandedRows.clear();
     saveState();
@@ -4316,6 +4418,7 @@ income:            'Income',
       fmd.categories.variable     = buildList(md?.categories?.variable,     fmd.categories.variable);
       fmd.categories.recreational = buildList(md?.categories?.recreational, fmd.categories.recreational);
       fmd.categories.savings      = buildList(md?.categories?.savings,      fmd.categories.savings);
+      fmd.categories.debt         = buildList(md?.categories?.debt,         fmd.categories.debt);
     });
 
     saveState();
@@ -4329,7 +4432,7 @@ income:            'Income',
     (async () => {
       showLoadingOverlay();
       try {
-        const expenseSections = ['fixed', 'variable', 'recreational', 'savings'];
+        const expenseSections = ['fixed', 'variable', 'recreational', 'savings', 'debt'];
         const sourcePayloads = [];
         for (const sectionKey of expenseSections) {
           const list = md?.categories?.[sectionKey] || [];

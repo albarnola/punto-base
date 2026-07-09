@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=15" />
+  <link rel="stylesheet" href="css/styles.css?v=16" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -536,6 +536,41 @@
         </div>
       </section>
 
+      <!-- Debt Paydown Section (hidden unless the month has debt rows or
+           Net Worth has debt accounts — see refreshDebtSection in app.js) -->
+      <section class="budget-section" id="debt-section" aria-labelledby="debt-heading" hidden>
+        <h2 id="debt-heading">Debt Paydown</h2>
+        <p class="section-note">Payments toward loans and cards — allocated from income but tracked separately from expenses. Paying more than planned is a good thing.</p>
+        <div class="table-wrapper">
+          <table aria-labelledby="debt-heading">
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Expected</th>
+                <th scope="col">Actual</th>
+                <th scope="col">Variance</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="debt-body">
+              <!-- rows injected by app.js -->
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="5">
+                  <button class="btn-add" data-category="debt" aria-label="Add debt paydown row">+ Add Row</button>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </section>
+
+      <!-- Quiet entry point shown when the Debt Paydown section is hidden -->
+      <div class="debt-entry" id="debt-entry" hidden>
+        <button class="btn-add" data-category="debt" type="button" aria-label="Add a debt paydown section">+ Add debt paydown</button>
+      </div>
+
       <section class="budget-actions" aria-label="Budget actions">
         <button class="btn-secondary" id="apply-future-btn" type="button"></button>
       </section>
@@ -566,6 +601,10 @@
             <div class="summary-item">
               <dt>Investments</dt>
               <dd id="summary-investments">$0.00</dd>
+            </div>
+            <div class="summary-item" id="summary-debt-item" hidden>
+              <dt>Debt Paid</dt>
+              <dd id="summary-debt">$0.00</dd>
             </div>
             <div class="summary-item">
               <dt>Net</dt>
@@ -724,7 +763,7 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=15"></script>
+<script src="js/app.js?v=16"></script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {

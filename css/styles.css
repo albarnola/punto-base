@@ -1258,9 +1258,30 @@ tfoot td {
 .dashboard-safespend[hidden],
 .dashboard-breakdown[hidden],
 .dashboard-trends[hidden],
-.dashboard-tiles[hidden] {
+.dashboard-tiles[hidden],
+#debt-section[hidden],
+#debt-entry[hidden],
+#summary-debt-item[hidden] {
   display: none !important;
 }
+
+/* Debt Paydown quiet entry line + seed link in the empty state */
+.debt-entry {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: calc(-1 * var(--space-sm, 8px));
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--color-brand);
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn-link:hover { text-decoration: underline; }
 
 /* ============================================================
    SALARY PAGE
