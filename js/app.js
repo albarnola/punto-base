@@ -2366,8 +2366,7 @@ income:            'Income',
     const incomeEl      = document.getElementById('summary-income');
     const expensesEl    = document.getElementById('summary-expenses');
     const unallocatedEl = document.getElementById('summary-unallocated');
-    const savingsEl     = document.getElementById('summary-savings');
-    const investmentsEl = document.getElementById('summary-investments');
+    const savedInvestedEl = document.getElementById('summary-saved-invested');
     const netEl         = document.getElementById('summary-net');
     const insightEl     = document.getElementById('summary-insight');
 
@@ -2382,8 +2381,9 @@ income:            'Income',
                                           : 'unallocated-danger';
     }
 
-    if (savingsEl)     savingsEl.textContent     = formatCurrency(sum.savingsActual);
-    if (investmentsEl) investmentsEl.textContent = formatCurrency(sum.investmentsActual);
+    if (savedInvestedEl) {
+      savedInvestedEl.textContent = formatCurrency(sum.savingsActual + sum.investmentsActual);
+    }
 
     // Debt paydown item only appears when the month plans or logs debt payments.
     const debtItemEl = document.getElementById('summary-debt-item');

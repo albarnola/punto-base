@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=16" />
+  <link rel="stylesheet" href="css/styles.css?v=18" />
   <script>
     (function(){var s=localStorage.getItem('sidebarState');if(s==='collapsed')document.documentElement.classList.add('sidebar-collapsed');})();
   </script>
@@ -586,33 +586,35 @@
             </div>
           </div>
           <dl class="summary-details">
-            <div class="summary-item">
-              <dt>Income</dt>
-              <dd id="summary-income">$0.00</dd>
+            <div class="summary-group" aria-label="This month">
+              <span class="summary-group-label">This Month</span>
+              <div class="summary-item">
+                <dt>Income</dt>
+                <dd id="summary-income">$0.00</dd>
+              </div>
+              <div class="summary-item">
+                <dt>Expenses</dt>
+                <dd id="summary-expenses">$0.00</dd>
+              </div>
+              <div class="summary-item">
+                <dt>Saved &amp; Invested</dt>
+                <dd id="summary-saved-invested">$0.00</dd>
+              </div>
+              <div class="summary-item" id="summary-debt-item" hidden>
+                <dt>Debt Paid</dt>
+                <dd id="summary-debt">$0.00</dd>
+              </div>
             </div>
-            <div class="summary-item">
-              <dt>Expenses</dt>
-              <dd id="summary-expenses">$0.00</dd>
-            </div>
-            <div class="summary-item">
-              <dt>Savings</dt>
-              <dd id="summary-savings">$0.00</dd>
-            </div>
-            <div class="summary-item">
-              <dt>Investments</dt>
-              <dd id="summary-investments">$0.00</dd>
-            </div>
-            <div class="summary-item" id="summary-debt-item" hidden>
-              <dt>Debt Paid</dt>
-              <dd id="summary-debt">$0.00</dd>
-            </div>
-            <div class="summary-item">
-              <dt>Net</dt>
-              <dd id="summary-net">$0.00</dd>
-            </div>
-            <div class="summary-item">
-              <dt>Cash Flow</dt>
-              <dd id="summary-cashflow">$0.00</dd>
+            <div class="summary-group" aria-label="Result">
+              <span class="summary-group-label">Result</span>
+              <div class="summary-item">
+                <dt>Net</dt>
+                <dd id="summary-net">$0.00</dd>
+              </div>
+              <div class="summary-item">
+                <dt>Cash Flow</dt>
+                <dd id="summary-cashflow">$0.00</dd>
+              </div>
             </div>
           </dl>
         </div>
@@ -763,7 +765,7 @@
   <!-- ===== MOBILE BACKDROP ===== -->
   <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
 
-<script src="js/app.js?v=17"></script>
+<script src="js/app.js?v=18"></script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
