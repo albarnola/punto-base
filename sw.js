@@ -2,12 +2,12 @@
 // Cache-first for the app shell (HTML/CSS/JS/fonts/images) so the app opens
 // offline; network-only for Supabase so data is never stale-cached.
 // Bump CACHE_VERSION whenever shell files change (matches cache-bust bumps).
-const CACHE_VERSION = 'punto-base-v6';
+const CACHE_VERSION = 'punto-base-v7';
 
 const SHELL = [
   './',
   './index.html',
-  './css/styles.css?v=18',
+  './css/styles.css?v=19',
   './js/app.js?v=18',
   './js/api.js?v=4',
   './js/auth.js?v=3',

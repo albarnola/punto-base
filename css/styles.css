@@ -593,7 +593,9 @@ tfoot td {
   align-items: center;
   gap: var(--space-4);
   min-width: 0;
-  flex-shrink: 0;
+  /* The insight copy is the flexible piece — it truncates before the
+     numbers ever wrap or clip. */
+  flex-shrink: 1;
 }
 
 #summary-unallocated {
@@ -619,41 +621,27 @@ tfoot td {
   white-space: nowrap;
 }
 
-/* Detail row: quiet, secondary — two labeled groups (This Month | Result) */
+/* Detail row: one quiet line. A single hairline divider separates the
+   month's flows (Income … Debt Paid) from the outcome (Net, Cash Flow) —
+   no labels, the divider does the grouping. Gaps flex with the viewport
+   so the row compresses gracefully instead of wrapping or clipping. */
 .summary-details {
   display: flex;
   align-items: center;
-  gap: var(--space-6);
+  gap: clamp(var(--space-3), 1.6vw, var(--space-6));
   margin: 0;
-  flex-wrap: wrap;        /* never clip off-screen — wrap instead */
-  justify-content: flex-end;
-  min-width: 0;
+  flex-shrink: 0;   /* numbers keep their space; the insight copy yields */
 }
 
 .summary-group {
-  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--space-6);
-  padding-top: 10px;
+  gap: clamp(var(--space-3), 1.6vw, var(--space-6));
 }
 
 .summary-group + .summary-group {
-  padding-left: var(--space-6);
+  padding-left: clamp(var(--space-3), 1.6vw, var(--space-6));
   border-left: 1px solid var(--color-border);
-}
-
-.summary-group-label {
-  position: absolute;
-  top: -4px;
-  right: 0;
-  font-size: 0.625rem;
-  font-weight: var(--weight-semi);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  opacity: 0.7;
-  white-space: nowrap;
 }
 
 .summary-item {
@@ -695,6 +683,8 @@ tfoot td {
   font-weight: var(--weight-normal);
   color: var(--color-text-muted);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The headline value carries the state color; the insight stays quiet
@@ -2416,17 +2406,10 @@ tfoot td {
   .summary-group {
     gap: var(--space-2) var(--space-3);
     flex-wrap: wrap;
-    padding-top: 12px;
   }
 
   .summary-group + .summary-group {
     padding-left: var(--space-3);
-  }
-
-  .summary-group-label {
-    left: 0;
-    right: auto;
-    top: 0;
   }
 
   .summary-item {
