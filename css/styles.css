@@ -1284,7 +1284,8 @@ tfoot td {
 .dashboard-tiles[hidden],
 #debt-section[hidden],
 #debt-entry[hidden],
-#summary-debt-item[hidden] {
+#summary-debt-item[hidden],
+#invest-debt-paid-tile[hidden] {
   display: none !important;
 }
 
