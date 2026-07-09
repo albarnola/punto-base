@@ -2902,27 +2902,34 @@ tfoot td {
   white-space: nowrap;
 }
 
-/* Desktop: single visible column-header row, aligned columns across groups */
+/* Desktop: single visible column-header row, aligned columns across groups.
+   Fixed layout + fixed numeric column widths on EVERY budget table keeps
+   columns aligned across sections and makes horizontal overflow impossible
+   — the tables never scroll sideways. */
 @media (min-width: 768px) {
   .expense-group--follower thead {
     display: none;
   }
 
-  .budget-section--expenses table {
+  .table-wrapper {
+    overflow-x: clip;
+  }
+
+  .budget-section:not(.budget-section--investing) table {
     table-layout: fixed;
   }
 
-  .budget-section--expenses thead th:nth-child(2),
-  .budget-section--expenses thead th:nth-child(3),
-  .budget-section--expenses thead th:nth-child(4),
-  .budget-section--expenses tbody tr:not(.transaction-panel) > td:nth-child(2),
-  .budget-section--expenses tbody tr:not(.transaction-panel) > td:nth-child(3),
-  .budget-section--expenses tbody tr:not(.transaction-panel) > td:nth-child(4) {
+  .budget-section:not(.budget-section--investing) thead th:nth-child(2),
+  .budget-section:not(.budget-section--investing) thead th:nth-child(3),
+  .budget-section:not(.budget-section--investing) thead th:nth-child(4),
+  .budget-section:not(.budget-section--investing) tbody tr:not(.transaction-panel) > td:nth-child(2),
+  .budget-section:not(.budget-section--investing) tbody tr:not(.transaction-panel) > td:nth-child(3),
+  .budget-section:not(.budget-section--investing) tbody tr:not(.transaction-panel) > td:nth-child(4) {
     width: 132px;
   }
 
-  .budget-section--expenses thead th:last-child,
-  .budget-section--expenses tbody tr:not(.transaction-panel) > td:last-child {
+  .budget-section:not(.budget-section--investing) thead th:last-child,
+  .budget-section:not(.budget-section--investing) tbody tr:not(.transaction-panel) > td:last-child {
     width: 84px;
   }
 }
