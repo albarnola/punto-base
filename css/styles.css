@@ -494,6 +494,7 @@ tfoot td {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  margin-right: var(--space-2); /* air between ▲▼ and × */
 }
 
 .btn-reorder {
@@ -2930,7 +2931,9 @@ tfoot td {
 
   .budget-section:not(.budget-section--investing) thead th:last-child,
   .budget-section:not(.budget-section--investing) tbody tr:not(.transaction-panel) > td:last-child {
-    width: 84px;
+    /* ▲▼ (2 × 22px) + × (28px) + gaps + cell padding — 84px was cramming
+       the × against the card edge. */
+    width: 116px;
   }
 }
 
