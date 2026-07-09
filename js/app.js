@@ -2901,6 +2901,18 @@ income:            'Income',
       const contrib = md ? computeSummary(md).investmentsActual : 0;
       contribEl.textContent = formatCurrency(contrib);
     }
+
+    // Debt Paid tile — mirrors Contributed: pulls the Budget page's debt
+    // section actual for this month. Balances aren't auto-nudged; the tile
+    // reminds the user to update debt balances by hand.
+    const debtTileEl = document.getElementById('invest-debt-paid-tile');
+    const debtPaidEl = document.getElementById('invest-debt-paid');
+    if (debtTileEl && debtPaidEl) {
+      const md = state.months[currentMonth];
+      const paid = md ? computeSummary(md).debtActual : 0;
+      debtTileEl.hidden = paid === 0;
+      debtPaidEl.textContent = formatCurrency(paid);
+    }
   }
 
   function renderInvestingChart() {
