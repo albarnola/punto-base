@@ -2457,13 +2457,16 @@ income:            'Income',
 
     // TOTAL INCOME — hybrid basis: past months use actual income received
     // (falling back to the projection when no actuals were logged); the
-    // current and future months keep the full-month projection so Net Cash
-    // Left stays a useful end-of-month forecast.
+    // current and future months use the projection as a floor but never
+    // ignore extra income — a bonus above plan (max) flows straight into
+    // the tile and the cash-left forecast, matching the summary bar.
     const realMonthKey = toMonthKey(new Date());
     const isPastMonth  = currentMonth < realMonthKey;
     const projected    = sum.incomeExpected;
     const received     = sum.incomeActual;
-    const totalIncome  = (isPastMonth && received > 0) ? received : projected;
+    const totalIncome  = (isPastMonth && received > 0)
+      ? received
+      : Math.max(projected, received);
 
     // TOTAL SAVED combines post-tax + pre-tax (the existing summary's
     // savings + investments tiles already split this the same way).
@@ -2496,7 +2499,11 @@ income:            'Income',
     if (incomeSubEl) {
       const differs = Math.round(received * 100) !== Math.round(projected * 100);
       if (currentMonth === realMonthKey && received > 0 && differs) {
-        incomeSubEl.textContent = `${formatCurrency(received)} received so far`;
+        // Above plan (bonus): the tile already shows the actual, so note the
+        // plan instead. Below plan: show progress toward it.
+        incomeSubEl.textContent = received > projected
+          ? `vs ${formatCurrency(projected)} projected`
+          : `${formatCurrency(received)} received so far`;
         incomeSubEl.hidden = false;
       } else if (isPastMonth && received > 0 && differs) {
         incomeSubEl.textContent = `vs ${formatCurrency(projected)} projected`;
