@@ -2022,6 +2022,7 @@ income:            'Income',
       'data-txn-id':  txn.id,
       'data-row-id':  rowId,
       'data-section': section,
+      'data-date':    txn.date || '',
     });
     div.appendChild(el('span', { className: 'txn-date',   textContent: formatDate(txn.date) }));
     div.appendChild(el('span', { className: 'txn-amount', textContent: formatCurrency(parseAmount(txn.amount)) }));
@@ -2052,7 +2053,16 @@ income:            'Income',
     if (row.transactions.length === 0) {
       list.appendChild(el('p', { className: 'txn-empty', textContent: T('noTransactions') }));
     } else {
-      for (const txn of row.transactions) {
+      // Display in date order (stable, so same-day entries keep the order
+      // they were added). Underlying array stays in insertion order.
+      const ordered = row.transactions
+        .map((txn, i) => ({ txn, i }))
+        .sort((a, b) => {
+          const da = a.txn.date || '';
+          const db = b.txn.date || '';
+          return da < db ? -1 : da > db ? 1 : a.i - b.i;
+        });
+      for (const { txn } of ordered) {
         list.appendChild(renderTransactionItem(txn, row.id, section));
       }
     }
@@ -3646,7 +3656,15 @@ income:            'Income',
     const list = document.getElementById(`txn-list-${rowId}`);
     if (list) {
       list.querySelector('.txn-empty')?.remove();
-      list.appendChild(renderTransactionItem(txn, rowId, section));
+      // Keep the visible list in date order: insert before the first item
+      // with a later date (same-day entries append after each other).
+      const item = renderTransactionItem(txn, rowId, section);
+      const items = list.querySelectorAll('.transaction-item');
+      let before = null;
+      for (const existing of items) {
+        if ((existing.dataset.date || '') > (txn.date || '')) { before = existing; break; }
+      }
+      list.insertBefore(item, before);
     }
 
     amountInput.value = '';
