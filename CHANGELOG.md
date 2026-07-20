@@ -5,6 +5,7 @@ All notable changes to Punto Base will be documented in this file.
 ## v0.4 — 2026-07-08
 
 ### Added
+- "Copy last month's transactions" shortcut in transaction panels — one click re-enters recurring charges (subscriptions etc.) with dates shifted to this month; skips entries already present, so cancelled subscriptions can simply be ×'d after copying
 - Net Worth "Debt Paid This Month" tile — mirrors the Contributed tile, pulling the Budget page's debt paydown total for the selected month; appears only when payments were logged and reminds you to update debt balances manually
 - Debt Paydown: new Budget page section for loan/card payments — allocated from income but tracked separately from expenses (like savings); paying more than planned counts as good variance. Section stays hidden until you add a row via the quiet "+ Add debt paydown" link or have debt accounts in Net Worth (which offers one-click seeding of a row per debt account). Rows are free-typed and work without Net Worth; CSV import supported (migration: db/migrations/stage8_debt_paydown_section.sql)
 - Net worth: Investing page renamed to "Net Worth" — new Checking, Savings, and Debt account types; debt balances entered as what you owe and subtracted from the total; tile shows an assets − debt breakdown when debt exists; chart plots net worth over time (migration: db/migrations/stage7_networth_account_types.sql)

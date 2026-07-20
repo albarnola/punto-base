@@ -1315,6 +1315,15 @@ tfoot td {
 #debt-sync-networth:hover { color: var(--color-brand); }
 #debt-sync-networth[hidden] { display: none; }
 
+/* "Copy last month's transactions" shortcut inside transaction panels */
+.txn-copy-prev {
+  align-self: flex-start;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+}
+.txn-copy-prev:hover { color: var(--color-brand); }
+
 /* ============================================================
    SALARY PAGE
    ============================================================ */
