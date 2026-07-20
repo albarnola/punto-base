@@ -1307,6 +1307,14 @@ tfoot td {
 }
 .btn-link:hover { text-decoration: underline; }
 
+#debt-sync-networth {
+  margin-left: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+#debt-sync-networth:hover { color: var(--color-brand); }
+#debt-sync-networth[hidden] { display: none; }
+
 /* ============================================================
    SALARY PAGE
    ============================================================ */
