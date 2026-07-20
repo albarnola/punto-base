@@ -2097,6 +2097,20 @@ income:            'Income',
 
     form.append(dateInput, amountInput, noteInput, addBtn);
     inner.appendChild(form);
+
+    // Recurring-charges shortcut: offer to copy last month's transactions
+    // (subscriptions etc.) when the prior month's matching row has some.
+    if (getPrevMonthRowTransactions(row, section).length > 0) {
+      inner.appendChild(el('button', {
+        className:      'btn-link txn-copy-prev',
+        type:           'button',
+        'data-action':  'copy-prev-txns',
+        'data-row-id':  row.id,
+        'data-section': section,
+        textContent:    "↻ Copy last month's transactions",
+      }));
+    }
+
     td.appendChild(inner);
     panelTr.appendChild(td);
     return panelTr;
@@ -3688,6 +3702,83 @@ income:            'Income',
     debouncedSave();
   }
 
+  // ------------------------------------------------------------
+  // "Copy last month's transactions" — recurring charges shortcut.
+  // Matches the row in the prior month by category id (falling back to
+  // name), copies its transactions with dates shifted to the same day of
+  // the current month, and skips any note+amount pair already present so
+  // repeat clicks never duplicate. Cancelled a subscription? Just × the
+  // copied entry — the date still tells you when it used to bill.
+  // ------------------------------------------------------------
+  function getPrevMonthRowTransactions(row, section) {
+    const [y, m]  = currentMonth.split('-').map(Number);
+    const prevMd  = state.months[toMonthKey(new Date(y, m - 2, 1))];
+    if (!prevMd) return [];
+    const list = section === 'income' ? prevMd.income : (prevMd.categories?.[section] || []);
+    const name = (row.name || '').trim().toLowerCase();
+    const prevRow = list.find(r => r.id === row.id) ||
+                    (name ? list.find(r => (r.name || '').trim().toLowerCase() === name) : null);
+    return (prevRow && prevRow.transactions) || [];
+  }
+
+  function copyPrevMonthTransactions(rowId, section) {
+    const row = findRow(section, rowId);
+    if (!row) return;
+    const prevTxns = getPrevMonthRowTransactions(row, section);
+    if (prevTxns.length === 0) return;
+    if (!Array.isArray(row.transactions)) row.transactions = [];
+
+    const [cy, cm]    = currentMonth.split('-').map(Number);
+    const daysInMonth = new Date(cy, cm, 0).getDate();
+    const key  = (t) => `${(t.note || '').trim().toLowerCase()}|${parseAmount(t.amount)}`;
+    const have = new Set(row.transactions.map(key));
+    const toCopy = prevTxns.filter(t => !have.has(key(t)));
+    if (toCopy.length === 0) {
+      showToast("Everything from last month is already here");
+      return;
+    }
+
+    pushUndo(`copy last month's transactions to ${row.name}`);
+    for (const src of toCopy) {
+      const day  = Math.min(parseInt((src.date || '').slice(8, 10), 10) || 1, daysInMonth);
+      const date = `${currentMonth}-${String(day).padStart(2, '0')}`;
+      const txn  = newTransaction(parseAmount(src.amount), date, src.note || '');
+      row.transactions.push(txn);
+      bumpRowActual(row, txn.amount);
+
+      if (row.monthly_entry_id) {
+        const capturedRow = row;
+        const capturedTxn = txn;
+        withRetry(
+          () => window.puntoApi.insertTransaction({
+            id:               capturedTxn.id,
+            monthly_entry_id: capturedRow.monthly_entry_id,
+            amount:           capturedTxn.amount,
+            description:      capturedTxn.note || null,
+            transaction_date: capturedTxn.date || null,
+            transaction_type: 'manual',
+          }),
+          (err) => {
+            console.warn('copyPrevMonthTransactions: insert failed, reverting:', err);
+            const idx = capturedRow.transactions.findIndex(t => t.id === capturedTxn.id);
+            if (idx !== -1) {
+              capturedRow.transactions.splice(idx, 1);
+              bumpRowActual(capturedRow, -capturedTxn.amount);
+              renderAll();
+              debouncedSave();
+            }
+          }
+        );
+      } else {
+        console.warn(`copyPrevMonthTransactions: row "${row.name}" has no monthly_entry_id; skipping Supabase write.`);
+      }
+    }
+
+    renderAll();
+    debouncedSave();
+    showToast(`Copied ${toCopy.length} transaction${toCopy.length === 1 ? '' : 's'} from last month`);
+  }
+
   function removeTransaction(rowId, section, txnId, itemEl) {
     const row = findRow(section, rowId);
     if (!row) return;
@@ -3943,6 +4034,13 @@ income:            'Income',
           debouncedSave();
         }
       );
+      return;
+    }
+
+    // Copy last month's transactions into this row
+    const copyTxnsBtn = e.target.closest('[data-action="copy-prev-txns"]');
+    if (copyTxnsBtn) {
+      copyPrevMonthTransactions(copyTxnsBtn.dataset.rowId, copyTxnsBtn.dataset.section);
       return;
     }
 
