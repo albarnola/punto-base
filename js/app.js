@@ -2341,6 +2341,18 @@ income:            'Income',
     const debtEntry   = document.getElementById('debt-entry');
     if (debtSection) debtSection.hidden = !showDebt;
     if (debtEntry)   debtEntry.hidden   = showDebt;
+
+    // "Add new debts from Net Worth" appears only when the section already
+    // has rows AND a debt account exists with no matching row (added in Net
+    // Worth after seeding). Empty sections use the empty-state seed link.
+    const syncBtn = document.getElementById('debt-sync-networth');
+    if (syncBtn) {
+      const missing = debtRows.length > 0 && getDebtAccounts().some(acc => {
+        const name = (acc.name || '').trim().toLowerCase();
+        return name && !debtRows.some(r => (r.name || '').trim().toLowerCase() === name);
+      });
+      syncBtn.hidden = !missing;
+    }
   }
 
   // Per-group subtotals in the unified Expenses card header rows.
@@ -5331,6 +5343,7 @@ income:            'Income',
 
     document.addEventListener('click', e => {
       if (e.target.id === 'copy-prev-month-btn') { copyFromPrevMonth(); return; }
+      if (e.target.id === 'debt-sync-networth')  { debtSeedRowsFromAccounts(); return; }
       if (e.target.id === 'apply-future-btn')    { applyCurrentToFutureMonths(); return; }
       if (e.target.id === 'export-btn')          { exportJSON(); return; }
       if (e.target.id === 'reset-month-btn')     { confirmInline(e.target, T('resetMonthConfirm'), resetCurrentMonth); return; }
