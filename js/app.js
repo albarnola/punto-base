@@ -2509,10 +2509,11 @@ income:            'Income',
     const totalSpent  = sum.expensesActual;
     const totalSaved  = sum.savingsActual + sum.investmentsActual;
 
-    // NET CASH LEFT subtracts only post-tax savings — pre-tax was never
-    // in the take-home pool to begin with.
-    const postTaxSavingsAct = sumListActual(md.categories.savings || []);
-    const netCash = totalIncome - totalSpent - postTaxSavingsAct - sum.debtActual;
+    // CASH LEFT — deliberately simple: the income tile minus the spent tile,
+    // nothing else. Savings and debt payments are NOT subtracted here (they
+    // have their own tile and summary-bar items); this tile answers exactly
+    // "first square minus second square".
+    const netCash = totalIncome - totalSpent;
     const netRounded = Math.round(netCash * 100) / 100;
 
     headingEl.textContent = `${monthName} at a glance`;
