@@ -2788,12 +2788,14 @@ income:            'Income',
       window.puntoApi.getInvestmentSnapshots(),
     ]).then(([accRes, snapRes]) => {
       if (accRes && accRes.success && snapRes && snapRes.success) {
-        // flow_base is local-only bookkeeping (Supabase doesn't store it) —
-        // carry it over from the cached snapshots so same-month Budget flows
-        // keep applying after hydration.
+        // flow_base: prefer the server's value (synced across devices since
+        // stage 9); fall back to the cached local value for rows saved
+        // before the migration. NULL stays unset → legacy fixed-balance.
         const prior = investing.snapshots || [];
         investing = { accounts: accRes.data, snapshots: snapRes.data };
         for (const s of investing.snapshots) {
+          if (s.flow_base != null) { s.flow_base = parseAmount(s.flow_base); continue; }
+          delete s.flow_base;
           const p = prior.find(x => x.account_id === s.account_id && x.month === s.month);
           if (p && typeof p.flow_base === 'number') s.flow_base = p.flow_base;
         }
@@ -2892,7 +2894,7 @@ income:            'Income',
     saveInvesting();
     renderInvesting();
     if (window.puntoApi && typeof window.puntoApi.upsertInvestmentSnapshot === 'function') {
-      const res = await window.puntoApi.upsertInvestmentSnapshot({ account_id: accountId, month, balance });
+      const res = await window.puntoApi.upsertInvestmentSnapshot({ account_id: accountId, month, balance, flow_base: flowBase });
       if (res && res.success && res.data) {
         const snap = investSnapshotFor(accountId, month);
         if (snap) { snap.id = res.data.id; saveInvesting(); }
