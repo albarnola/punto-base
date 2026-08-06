@@ -2788,7 +2788,15 @@ income:            'Income',
       window.puntoApi.getInvestmentSnapshots(),
     ]).then(([accRes, snapRes]) => {
       if (accRes && accRes.success && snapRes && snapRes.success) {
+        // flow_base is local-only bookkeeping (Supabase doesn't store it) —
+        // carry it over from the cached snapshots so same-month Budget flows
+        // keep applying after hydration.
+        const prior = investing.snapshots || [];
         investing = { accounts: accRes.data, snapshots: snapRes.data };
+        for (const s of investing.snapshots) {
+          const p = prior.find(x => x.account_id === s.account_id && x.month === s.month);
+          if (p && typeof p.flow_base === 'number') s.flow_base = p.flow_base;
+        }
         investingHydrated = true;
         saveInvesting();
       }
@@ -2826,16 +2834,21 @@ income:            'Income',
            sumMatching(md.categories.pretaxInvestments, 'pretaxInvestments');
   }
 
-  // Balance for `month`. A manually-entered snapshot is authoritative for its
-  // own month; months after it derive automatically by applying Budget flows
-  // (debt payments down, contributions up). Typing a balance replaces the
-  // estimate and becomes the new base going forward.
+  // Balance for `month`. A manually-entered snapshot is the base; Budget
+  // flows logged AFTER it (debt payments down, contributions up) derive the
+  // months that follow — and the rest of its own month, via flow_base: the
+  // flow total captured when the balance was typed, so only flows added
+  // after that moment move the number. Legacy snapshots without flow_base
+  // stay fixed for their month (no double-counting).
   function investBalanceAsOf(accountId, month) {
     const best = investLastSnapshotAsOf(accountId, month);
     if (!best) return null;
     let bal = parseAmount(best.balance);
     const acc = investing.accounts.find(a => a.id === accountId);
     if (!acc) return bal;
+    if (typeof best.flow_base === 'number') {
+      bal += investBudgetFlow(acc, best.month) - best.flow_base;
+    }
     let [y, m] = best.month.split('-').map(Number);
     for (let key = toMonthKey(new Date(y, m, 1)); key <= month;
          m += 1, key = toMonthKey(new Date(y, m, 1))) {
@@ -2864,12 +2877,17 @@ income:            'Income',
   }
 
   async function investSetBalance(accountId, month, balance) {
+    // Capture the Budget flow total at write time: only flows logged after
+    // this moment adjust the typed balance (see investBalanceAsOf).
+    const acc = investing.accounts.find(a => a.id === accountId);
+    const flowBase = acc ? investBudgetFlow(acc, month) : 0;
     const existing = investSnapshotFor(accountId, month);
     if (existing) {
-      if (parseAmount(existing.balance) === balance) return;
+      if (parseAmount(existing.balance) === balance && existing.flow_base === flowBase) return;
       existing.balance = balance;
+      existing.flow_base = flowBase;
     } else {
-      investing.snapshots.push({ id: null, account_id: accountId, month, balance });
+      investing.snapshots.push({ id: null, account_id: accountId, month, balance, flow_base: flowBase });
     }
     saveInvesting();
     renderInvesting();
@@ -3110,7 +3128,9 @@ income:            'Income',
         'data-field': 'balance',
       });
       if (snap) {
-        balInput.value = formatCurrency(parseAmount(snap.balance));
+        // Show the derived value: the typed balance plus any Budget flows
+        // logged since it was typed (blur re-saves it, which rebases).
+        balInput.value = formatCurrency(carried ?? parseAmount(snap.balance));
       } else {
         balInput.value = '';
         balInput.placeholder = carried !== null
