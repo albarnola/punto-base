@@ -3066,6 +3066,16 @@ tfoot td {
   justify-content: flex-end;
 }
 
+/* Right-align the action cell so every × lines up in one column,
+   with Pay sitting to its left on debt rows */
+#page-investing tbody tr > td:last-child {
+  text-align: right;
+}
+
+#page-investing tbody tr > td:last-child .row-actions {
+  justify-content: flex-end;
+}
+
 /* Keep the Pay button reachable on phones, where row actions are
    otherwise hidden until a row is expanded */
 @media (max-width: 767px) {
