@@ -803,7 +803,7 @@
       const client = await getClient();
       const { data, error } = await client
         .from('investment_snapshots')
-        .select('id, account_id, month, balance')
+        .select('id, account_id, month, balance, flow_base')
         .eq('user_id', userId)
         .order('month', { ascending: true });
       if (error) return { success: false, error: friendlyError(error) };
@@ -836,7 +836,7 @@
       if (existing && existing.id) {
         const { data, error } = await client
           .from('investment_snapshots')
-          .update({ balance: payload.balance ?? 0, updated_at: new Date().toISOString() })
+          .update({ balance: payload.balance ?? 0, flow_base: payload.flow_base ?? null, updated_at: new Date().toISOString() })
           .eq('id', existing.id)
           .eq('user_id', userId)
           .select()
@@ -850,6 +850,7 @@
         account_id: payload.account_id,
         month:      payload.month,
         balance:    payload.balance ?? 0,
+        flow_base:  payload.flow_base ?? null,
       };
       const { data, error } = await client
         .from('investment_snapshots')
