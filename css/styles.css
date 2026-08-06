@@ -2988,3 +2988,94 @@ tfoot td {
     font-size: var(--text-xs);
   }
 }
+
+/* ============================================================
+   PAY DEBT FROM ASSET (Net Worth)
+   ============================================================ */
+.btn-pay {
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-brand);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semi);
+  padding: 3px 12px;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.btn-pay:hover {
+  background: var(--color-surface-alt);
+  border-color: var(--color-brand);
+}
+
+.btn-pay:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+.pay-modal {
+  width: min(400px, 100%);
+}
+
+.pay-hint {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.pay-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-3) var(--space-4);
+  align-items: center;
+}
+
+.pay-grid label {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.pay-source {
+  width: 100%;
+  max-width: none;
+}
+
+.pay-amount {
+  width: 100%;
+  font-family: var(--font-mono, inherit);
+  font-size: var(--text-base);
+  text-align: right;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.pay-amount:focus {
+  outline: none;
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 2px rgb(74 164 141 / .18);
+}
+
+.pay-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Keep the Pay button reachable on phones, where row actions are
+   otherwise hidden until a row is expanded */
+@media (max-width: 767px) {
+  #page-investing thead th:last-child,
+  #page-investing tbody tr > td:last-child {
+    width: auto;
+    padding: 10px 4px;
+  }
+
+  #page-investing tbody tr > td:last-child .row-actions {
+    display: inline-flex;
+  }
+}

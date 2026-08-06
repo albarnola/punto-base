@@ -5,6 +5,7 @@ All notable changes to Punto Base will be documented in this file.
 ## v0.4 — 2026-07-08
 
 ### Added
+- Net Worth "Pay" button on each debt row — pay a debt directly from an asset account: pick the source account, confirm the amount (prefilled to the lesser of what you owe and what's available), and both balances update for the month. A pure transfer between accounts — net worth is unchanged and the Budget page is untouched
 - Net Worth balances auto-update from the Budget: debt payments lower the matching debt account, savings and pre-tax investment contributions raise the matching account (matched by name). A manually typed balance is authoritative as of the moment it's entered — only flows logged after it move the number — and becomes the new base going forward; auto-derived balances show an "(estimated)" placeholder. Update manually anytime to reflect interest or market gains. The baseline syncs via Supabase so all devices agree (migration: db/migrations/stage9_snapshot_flow_base.sql)
 - "Copy last month's transactions" shortcut in transaction panels — one click re-enters recurring charges (subscriptions etc.) with dates shifted to this month; skips entries already present, so cancelled subscriptions can simply be ×'d after copying
 - Net Worth "Debt Paid This Month" tile — mirrors the Contributed tile, pulling the Budget page's debt paydown total for the selected month; appears only when payments were logged and reminds you to update debt balances manually

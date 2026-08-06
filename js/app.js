@@ -2955,6 +2955,100 @@ income:            'Income',
     }
   }
 
+  // ---- Pay debt from an asset account ------------------------------------
+  // Moves money between Net Worth accounts: the source asset and the debt
+  // both drop by the amount for the selected month. A pure transfer — the
+  // Budget page is untouched and net worth itself doesn't change.
+  let payModalEl = null;
+  function closePayModal() {
+    payModalEl?.remove();
+    payModalEl = null;
+    document.removeEventListener('keydown', onPayEsc);
+  }
+  function onPayEsc(e) { if (e.key === 'Escape') closePayModal(); }
+
+  function openPayDebtModal(debtAcc) {
+    const sources = investing.accounts.filter(a =>
+      a.account_type !== 'debt' && !a._isNew &&
+      (investBalanceAsOf(a.id, currentMonth) ?? 0) > 0);
+    if (sources.length === 0) {
+      showToast('No asset account with a balance to pay from');
+      return;
+    }
+
+    const debtName = debtAcc.name || 'debt';
+    const debtBal  = investBalanceAsOf(debtAcc.id, currentMonth) ?? 0;
+
+    const backdrop = el('div', { className: 'import-backdrop' });
+    const modal    = el('div', { className: 'import-modal pay-modal', role: 'dialog', 'aria-label': `Pay ${debtName}` });
+    const title    = el('h2', { className: 'import-title', textContent: `Pay ${debtName}` });
+    const closeBtn = el('button', { className: 'btn-icon import-close', 'aria-label': 'Close' }, '✕');
+    closeBtn.addEventListener('click', closePayModal);
+
+    const srcSel = el('select', { className: 'row-subtype pay-source', 'aria-label': 'Pay from account' });
+    for (const a of sources) {
+      const bal = investBalanceAsOf(a.id, currentMonth) ?? 0;
+      srcSel.appendChild(el('option', {
+        value: a.id,
+        textContent: `${a.name || 'Unnamed'} — ${formatCurrency(bal)}`,
+      }));
+    }
+
+    const amtInput = el('input', {
+      type: 'text',
+      inputmode: 'decimal',
+      className: 'pay-amount',
+      'aria-label': 'Amount to pay',
+    });
+    const suggested = () =>
+      Math.min(debtBal, investBalanceAsOf(srcSel.value, currentMonth) ?? 0);
+    amtInput.value = suggested() > 0 ? String(suggested()) : '';
+    srcSel.addEventListener('change', () => {
+      amtInput.value = suggested() > 0 ? String(suggested()) : '';
+    });
+
+    const hint = el('p', {
+      className: 'pay-hint',
+      textContent: `You owe ${formatCurrency(debtBal)}. This moves money between accounts — your Budget isn't affected.`,
+    });
+
+    const payBtn = el('button', { className: 'btn-primary', textContent: 'Pay' });
+    payBtn.addEventListener('click', async () => {
+      const amount = parseAmount(amtInput.value);
+      const src    = investing.accounts.find(a => a.id === srcSel.value);
+      if (!src) return;
+      const srcBal = investBalanceAsOf(src.id, currentMonth) ?? 0;
+      if (!(amount > 0)) { showToast('Enter an amount to pay'); return; }
+      if (amount > srcBal) {
+        showToast(`${src.name || 'That account'} only has ${formatCurrency(srcBal)}`);
+        return;
+      }
+      payBtn.disabled = true;
+      await investSetBalance(src.id, currentMonth, srcBal - amount);
+      const owed = investBalanceAsOf(debtAcc.id, currentMonth) ?? debtBal;
+      await investSetBalance(debtAcc.id, currentMonth, Math.max(0, owed - amount));
+      closePayModal();
+      showToast(`Paid ${formatCurrency(amount)} toward ${debtName} from ${src.name || 'account'}`);
+    });
+    amtInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); payBtn.click(); }
+    });
+
+    const grid = el('div', { className: 'pay-grid' },
+      el('label', { textContent: 'From account' }), srcSel,
+      el('label', { textContent: 'Amount' }),       amtInput,
+    );
+    const footer = el('div', { className: 'pay-footer' }, payBtn);
+    const body   = el('div', { className: 'import-body' }, hint, grid, footer);
+    modal.append(el('div', { className: 'import-header' }, title, closeBtn), body);
+    backdrop.appendChild(modal);
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) closePayModal(); });
+    document.body.appendChild(backdrop);
+    payModalEl = backdrop;
+    document.addEventListener('keydown', onPayEsc);
+    amtInput.focus();
+  }
+
   function renderInvestingTiles() {
     const totalEl   = document.getElementById('invest-total');
     const changeEl  = document.getElementById('invest-change');
@@ -3166,6 +3260,15 @@ income:            'Income',
       removeBtn.addEventListener('click', () => investRemoveAccount(acc.id));
       const actionsTd = el('td');
       const actions = el('div', { className: 'row-actions' });
+      if (isDebt && !acc._isNew) {
+        const payBtn = el('button', {
+          className: 'btn-pay',
+          'aria-label': `Pay ${acc.name || 'debt'} from an account`,
+          textContent: 'Pay',
+        });
+        payBtn.addEventListener('click', () => openPayDebtModal(acc));
+        actions.appendChild(payBtn);
+      }
       actions.appendChild(removeBtn);
       actionsTd.appendChild(actions);
 
