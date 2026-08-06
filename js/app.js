@@ -2800,15 +2800,49 @@ income:            'Income',
     return investing.snapshots.find(s => s.account_id === accountId && s.month === month) || null;
   }
 
-  // Carry-forward balance: most recent snapshot at or before `month`.
+  // Most recent manually-entered snapshot at or before `month`.
   // 'YYYY-MM' strings compare correctly lexicographically.
-  function investBalanceAsOf(accountId, month) {
+  function investLastSnapshotAsOf(accountId, month) {
     let best = null;
     for (const s of investing.snapshots) {
       if (s.account_id !== accountId || s.month > month) continue;
       if (!best || s.month > best.month) best = s;
     }
-    return best ? parseAmount(best.balance) : null;
+    return best;
+  }
+
+  // Net Budget-page flow for an account in one month, matched by row name
+  // (same case-insensitive matching the debt-section seeding uses):
+  // debt payments reduce what you owe; savings + pre-tax investment
+  // contributions grow the account. Unmatched rows contribute nothing.
+  function investBudgetFlow(acc, monthKey) {
+    const name = (acc.name || '').trim().toLowerCase();
+    const md   = state.months[monthKey];
+    if (!name || !md || !md.categories) return 0;
+    const sumMatching = (rows, section) => (rows || []).reduce((t, r) =>
+      (r.name || '').trim().toLowerCase() === name ? t + getActual(r, section, monthKey) : t, 0);
+    if (acc.account_type === 'debt') return -sumMatching(md.categories.debt, 'debt');
+    return sumMatching(md.categories.savings, 'savings') +
+           sumMatching(md.categories.pretaxInvestments, 'pretaxInvestments');
+  }
+
+  // Balance for `month`. A manually-entered snapshot is authoritative for its
+  // own month; months after it derive automatically by applying Budget flows
+  // (debt payments down, contributions up). Typing a balance replaces the
+  // estimate and becomes the new base going forward.
+  function investBalanceAsOf(accountId, month) {
+    const best = investLastSnapshotAsOf(accountId, month);
+    if (!best) return null;
+    let bal = parseAmount(best.balance);
+    const acc = investing.accounts.find(a => a.id === accountId);
+    if (!acc) return bal;
+    let [y, m] = best.month.split('-').map(Number);
+    for (let key = toMonthKey(new Date(y, m, 1)); key <= month;
+         m += 1, key = toMonthKey(new Date(y, m, 1))) {
+      bal += investBudgetFlow(acc, key);
+    }
+    if (acc.account_type === 'debt') bal = Math.max(0, bal);
+    return bal;
   }
 
   // Assets vs. debt at `month`. Debt balances are entered as what you owe
@@ -2945,8 +2979,8 @@ income:            'Income',
     }
 
     // Debt Paid tile — mirrors Contributed: pulls the Budget page's debt
-    // section actual for this month. Balances aren't auto-nudged; the tile
-    // reminds the user to update debt balances by hand.
+    // section actual for this month. Matching debt balances update
+    // automatically via investBudgetFlow (manual entries still win).
     const debtTileEl = document.getElementById('invest-debt-paid-tile');
     const debtPaidEl = document.getElementById('invest-debt-paid');
     if (debtTileEl && debtPaidEl) {
@@ -3061,9 +3095,13 @@ income:            'Income',
       const typeTd = el('td');
       typeTd.appendChild(typeSelect);
 
-      // Balance for the selected month (carry-forward as placeholder)
+      // Balance for the selected month. No manual entry → show the derived
+      // value as a placeholder: "(estimated)" when Budget flows moved it,
+      // "(carried)" when it's just last month's number carried forward.
       const snap    = investSnapshotFor(acc.id, currentMonth);
       const carried = investBalanceAsOf(acc.id, currentMonth);
+      const base    = investLastSnapshotAsOf(acc.id, currentMonth);
+      const isEstimated = !snap && base !== null && carried !== parseAmount(base.balance);
       const balInput = el('input', {
         type: 'text',
         inputmode: 'decimal',
@@ -3075,7 +3113,9 @@ income:            'Income',
         balInput.value = formatCurrency(parseAmount(snap.balance));
       } else {
         balInput.value = '';
-        balInput.placeholder = carried !== null ? `${formatCurrency(carried)} (carried)` : formatCurrency(0);
+        balInput.placeholder = carried !== null
+          ? `${formatCurrency(carried)} (${isEstimated ? 'estimated' : 'carried'})`
+          : formatCurrency(0);
       }
       balInput.addEventListener('focus', () => {
         const raw = parseAmount(balInput.value);
